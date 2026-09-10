@@ -1,9 +1,13 @@
 """The ``botlab`` command line interface.
 
-``botlab run [PROJECT_DIR]`` — apply a Python-declared BotLab project, compile
-its controller plan, package it as release.zip, and open the browser BotLab
-simulation runtime. Any standard two-file BotLab project works; nothing here
-knows about a specific robot or policy.
+- ``botlab run [PROJECT_DIR]`` — compile the project, package release.zip, and
+  open the browser BotLab simulation runtime.
+- ``botlab build [PROJECT_DIR]`` — export release.zip locally (no server, no
+  upload); the same package the platform's ``/d/<id>/`` demos are served from.
+- ``botlab validate`` / ``botlab ui`` — packaging dry-run and UI snapshot tools.
+
+Any standard two-file BotLab project works; nothing here knows about a specific
+robot or policy.
 """
 
 from __future__ import annotations
@@ -64,6 +68,22 @@ def _cmd_run(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_build(args: argparse.Namespace) -> int:
+    """Export the project as a BotLab release.zip (local, no upload)."""
+    project_dir = Path(args.project_dir or ".").resolve()
+    project = load_project(project_dir)
+    package = create_release_package(
+        project,
+        metadata={"name": project.manifest["project"]["name"]},
+    )
+    output = Path(args.out).resolve() if args.out else project_dir / "release.zip"
+    if output.parent != project_dir and not output.parent.exists():
+        raise BotLabError(f"output directory does not exist: {output.parent}")
+    output.write_bytes(package)
+    print(f"[botlab] wrote {output} ({len(package)} bytes)")
+    return 0
+
+
 def _cmd_validate(args: argparse.Namespace) -> int:
     project = load_project(Path(args.project_dir or ".").resolve())
     package = create_release_package(project, metadata={"name": project.manifest["project"]["name"]})
@@ -101,6 +121,14 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--no-server", action="store_true", help="only build release.zip (--out required)")
     run.add_argument("--no-browser", action="store_true", help="do not auto-open the browser")
     run.set_defaults(func=_cmd_run)
+
+    build = subparsers.add_parser(
+        "build",
+        help="export the project as release.zip (default: <project>/release.zip)",
+    )
+    build.add_argument("project_dir", nargs="?", default=".", help="project directory (default: cwd)")
+    build.add_argument("--out", help="output path for release.zip (default: <project>/release.zip)")
+    build.set_defaults(func=_cmd_build)
 
     validate = subparsers.add_parser("validate", help="apply a project and build its release in memory")
     validate.add_argument("project_dir", nargs="?", default=".", help="project directory (default: cwd)")

@@ -65,6 +65,7 @@ API 契约的完整文档见 BotLab 仓库的 `docs/api/`（Signal 表达式、`
 | 命令 | 作用 |
 |------|------|
 | `botlab run [DIR]` | 编译打包并在浏览器里运行工程（`--no-browser`、`--out release.zip`、`--host/--port`） |
+| `botlab build [DIR]` | 本地导出 `release.zip`（默认写到工程目录；`--out` 自定义路径）。产物与平台 `/d/<id>/` demo 发布包同格式，可直接交由平台托管 |
 | `botlab validate [DIR]` | 只做声明收集 + plan 编译 + 打包演练，不起服务 |
 | `botlab ui sync --botlab <path>` | 从一个 BotLab 构建产物同步 embed UI 快照 |
 | `botlab ui status` | 查看当前内置 UI 快照状态 |
