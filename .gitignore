@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Environments
+.venv/
+
+# The bundled browser runtime is a verbatim copy of a BotLab build closure
+# (115 MB of wasm/assets). It never belongs in git; regenerate it with
+# `botlab ui sync --botlab <BotLab checkout>` after building BotLab.
+src/botlab/ui/
+
+# Tooling
+.pytest_cache/
+.ruff_cache/

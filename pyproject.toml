@@ -1,0 +1,66 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "botlab"
+version = "0.1.0"
+description = "BotLab Python SDK and CLI: declare robot controllers in Python, run them in the browser BotLab simulation runtime."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Proprietary" }
+authors = [{ name = "OpenLegged" }]
+keywords = ["robotics", "mujoco", "onnx", "rl", "simulation", "sim2sim"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "Intended Audience :: Science/Research",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+  "PyYAML>=6.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/OpenLegged/botlab-python"
+Repository = "https://github.com/OpenLegged/botlab-python"
+
+[project.scripts]
+botlab = "botlab._cli:main"
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+  "ruff>=0.6",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/botlab"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src", "tests", "scripts", "README.md", "pyproject.toml"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+ignore = [
+  # The vendored SDK mirrors BotLab's browser source; keep its style verbatim.
+  "E501",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"src/botlab/sdk.py" = ["E", "F", "W", "I", "UP", "B"]
+
+[tool.pytest.ini_options]
+markers = ["e2e: browser end-to-end acceptance tests"]
+testpaths = ["tests"]
+addopts = ["-q", "-m", "not e2e"]
