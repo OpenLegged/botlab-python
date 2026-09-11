@@ -137,21 +137,30 @@ def _pack_resource(project_dir: Path, resource: dict, used: set[str]) -> list[di
 
 
 def create_release_package(project: LoadedProject, metadata: dict | None = None) -> bytes:
-    """Build release.zip bytes for a compiled project.
+    """Build release.zip bytes for a loaded project.
+
+    Compiled projects carry a ``compiledController`` plan and run without
+    Python. Projects whose action hook needs a live runtime (``modify=...``)
+    travel as sources + manifest only: the embed runtime boots Pyodide and
+    executes ``main.py`` itself.
 
     Robot/scene sources stay project-relative in the manifest; the embed
     runtime receives the project directory as its asset inventory (served at
     ``/project/`` by the CLI), so meshes referenced by the MJCF resolve through
     the inventory the same way they do for workspace projects.
     """
-    from ._project import compiled_controller_envelope
+    compiled = None
+    if project.compiled_plan is not None:
+        from ._project import compiled_controller_envelope
 
-    compiled = compiled_controller_envelope(project.compiled_plan, project.manifest, project.files)
-    if compiled["projectDigest"] != project.project_digest:
-        raise BotLabError(
-            "Cannot create Python release package: compiled controller does not match "
-            "the current manifest and source files."
+        compiled = compiled_controller_envelope(
+            project.compiled_plan, project.manifest, project.files
         )
+        if compiled["projectDigest"] != project.project_digest:
+            raise BotLabError(
+                "Cannot create Python release package: compiled controller does not match "
+                "the current manifest and source files."
+            )
 
     used_paths = {f"project/{path}" for path in project.files}
     packed: list[dict] = []
@@ -189,7 +198,7 @@ def create_release_package(project: LoadedProject, metadata: dict | None = None)
             "manifest": project.manifest,
             "files": source_manifest,
             "projectDigest": project.project_digest,
-            "compiledController": compiled,
+            **({"compiledController": compiled} if compiled is not None else {}),
             "assetBase": "project",
             "assetPaths": project.asset_paths,
         },

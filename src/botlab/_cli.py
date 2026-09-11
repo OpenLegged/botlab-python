@@ -53,7 +53,13 @@ def _cmd_run(args: argparse.Namespace) -> int:
         f"{resource['kind']}:{resource['id']}" for resource in project.manifest["resources"]
     )
     print(f"[botlab] project {project.manifest['project']['name']!r} — {summary}")
-    print(f"[botlab] plan: {len(project.compiled_plan['nodes'])} nodes, {len(project.compiled_plan['edges'])} edges")
+    if project.compiled_plan is not None:
+        print(
+            f"[botlab] plan: {len(project.compiled_plan['nodes'])} nodes, "
+            f"{len(project.compiled_plan['edges'])} edges (compiled, no Python at runtime)"
+        )
+    else:
+        print("[botlab] plan: runs via in-browser Pyodide (project uses Signal.action(modify=...))")
     try:
         serve_project(
             project_dir,

@@ -70,6 +70,13 @@ API 契约的完整文档见 BotLab 仓库的 `docs/api/`（Signal 表达式、`
 | `botlab ui sync --botlab <path>` | 从一个 BotLab 构建产物同步 embed UI 快照 |
 | `botlab ui status` | 查看当前内置 UI 快照状态 |
 
+## 文档（给人和给 AI 的手册）
+
+- [docs/component-reference.md](docs/component-reference.md) — **组件速查表**：SDK 全部公开符号与契约，写代码前先查
+- [docs/decision-table.md](docs/decision-table.md) — **选型决策表**：需求 → 组件映射、代码分层判断法、常见错误模式
+- [docs/error-guide.md](docs/error-guide.md) — **报错对照**：错误关键词 → 原因 → 修复
+- 完整 API 语义与教程见 BotLab 仓库 `docs/api/`、`docs/examples/`
+
 `botlab run` 默认绑定 `127.0.0.1` 的随机空闲端口；服务需要发送
 `Cross-Origin-Opener-Policy` / `Cross-Origin-Embedder-Policy` 隔离头（MuJoCo /
 ONNX Runtime Web 的 `SharedArrayBuffer` 依赖），代理或反代时必须保留这些头。
@@ -90,8 +97,12 @@ compiled controller 的 release 不需要浏览器端 Pyodide —— plan 由 Ty
 
 限制（与平台契约一致）：
 
-- `main.py` 必须是标准四行；`Signal.action(modify=...)` 与自定义 `Controller`
-  逐步回调需要活的 Python 运行时，不能打进离线 release。
+- `main.py` 必须是标准四行。
+- `Signal.action(modify=...)` 回调：`botlab run` 支持运行（浏览器内 Pyodide 执行
+  main.py，工程以「源码 + manifest」形态进包，无 compiledController）；`botlab build`
+  导出的离线包同样可跑（任何 BotLab embed 运行时都能起 Pyodide），但发布形态比
+  compiled 包重（多一次 Python 运行时加载，每控制步一次回调边界）。自定义
+  `Controller.step()` 逐步回调同样走这条路径。
 - 非空 `botlab.yaml` 的旧工程不在 CLI 支持范围内（Python 声明是唯一入口）。
 - 工程资产按项目相对路径声明，必须真实存在于工程目录内。
 

@@ -224,17 +224,18 @@ def load_project(project_dir: Path) -> LoadedProject:
     importlib.import_module("main")
 
     plan = session.policy_controller_plan
+    has_modifier = session.plan_has_modifier
+    _host.end_project_declaration()
     if plan is None:
         raise BotLabError(
-            "main.py did not register a controller; a compiled release requires "
+            "main.py did not register a controller; a release requires "
             "Simulation.run(PolicyController(...))."
         )
-    if session.plan_has_modifier:
-        raise BotLabError(
-            "Signal.action(modify=...) callbacks need the live Python runtime; the offline "
-            "CLI cannot package them."
-        )
-    _host.end_project_declaration()
+
+    # A modify() hook needs a live Python runtime, which the embed runtime
+    # provides via Pyodide when the package carries no compiled controller:
+    # sources + manifest travel, the plan does not.
+    compiled_plan = None if has_modifier else plan
 
     digest = python_release_project_digest(manifest, source_files)
     assets = _project_relative_assets(project_dir, source_files, manifest)
@@ -242,9 +243,9 @@ def load_project(project_dir: Path) -> LoadedProject:
         project_dir=project_dir,
         manifest=manifest,
         files=source_files,
-        compiled_plan=plan,
+        compiled_plan=compiled_plan,
         project_digest=digest,
-        plan_has_modifier=False,
+        plan_has_modifier=has_modifier,
         asset_paths=assets,
     )
 

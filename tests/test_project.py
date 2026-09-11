@@ -209,3 +209,39 @@ def test_validate_compiled_plan_requires_single_action_hook():
     }
     with pytest.raises(BotLabError, match="exactly one proc-action-hook"):
         validate_compiled_plan(plan, manifest)
+
+
+def test_modify_hook_project_travels_as_sources(tmp_path: Path):
+    """modify=... projects ship without compiledController (Pyodide runtime)."""
+    (tmp_path / "controller.py").write_text(
+        CONTROLLER.replace(
+            "action = actor(observation).action()",
+            "def soften(action, frame):\n"
+            "        return [value * 0.5 for value in action]\n"
+            "    action = actor(observation).action(modify=soften)",
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "main.py").write_text(MAIN, encoding="utf-8")
+    (tmp_path / "robot.preset.yaml").write_text(PRESET, encoding="utf-8")
+    robot_dir = tmp_path / "assets" / "robot"
+    robot_dir.mkdir(parents=True)
+    (robot_dir / "scene.xml").write_text("<mujoco/>", encoding="utf-8")
+    model_dir = tmp_path / "assets" / "models"
+    model_dir.mkdir(parents=True)
+    (model_dir / "policy.onnx").write_bytes(b"fake-onnx-bytes")
+
+    project = load_project(tmp_path)
+    assert project.plan_has_modifier is True
+    assert project.compiled_plan is None
+    # manifest + sources still travel (the embed runtime runs main.py itself)
+    assert project.manifest["project"]["name"] == "Test Duck"
+    assert "controller.py" in project.files
+
+    package = create_release_package(project)
+    archive = zipfile.ZipFile(io.BytesIO(package))
+    config = json.loads(archive.read("release.json"))
+    assert "compiledController" not in config["project"]
+    assert "project/controller.py" in archive.namelist()
+    # digest still covers manifest + sources
+    assert config["project"]["projectDigest"] == project.project_digest
