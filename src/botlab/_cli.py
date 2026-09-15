@@ -1,7 +1,11 @@
 """The ``botlab`` command line interface.
 
-- ``botlab run [PROJECT_DIR]`` — compile the project, package release.zip, and
-  open the browser BotLab simulation runtime.
+- ``botlab run [PROJECT_DIR]`` — debug-run the project from source: compile it,
+  serve the full BotLab editor (plus the embed runtime) to the browser, and
+  rebuild the release whenever source changes. The editor opens with the
+  local project loaded: edit the code, hit Run (or reload) — the debug server
+  always serves current sources and assets straight from the directory. No
+  zip file is written.
 - ``botlab build [PROJECT_DIR]`` — export release.zip locally (no server, no
   upload); the same package the platform's ``/d/<id>/`` demos are served from.
 - ``botlab validate`` / ``botlab ui`` — packaging dry-run and UI snapshot tools.
@@ -13,42 +17,18 @@ robot or policy.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
-import tempfile
 from pathlib import Path
 
+from ._debug import DebugReleaseProvider, _project_signature, build_debug_release
 from ._host import BotLabError
 from ._project import load_project
 from ._release import create_release_package
 from ._server import serve_project, ui_snapshot_dir
 
 
-def _cmd_run(args: argparse.Namespace) -> int:
-    project_dir = Path(args.project_dir or ".").resolve()
-    project = load_project(project_dir)
-    package = create_release_package(
-        project,
-        metadata={
-            "name": project.manifest["project"]["name"],
-        },
-    )
-
-    release_zip: Path
-    if args.out:
-        release_zip = Path(args.out).resolve()
-        release_zip.write_bytes(package)
-        print(f"[botlab] wrote {release_zip} ({len(package)} bytes)")
-    else:
-        release_handle = tempfile.NamedTemporaryFile(  # noqa: SIM115 - lives as long as the server
-            prefix="botlab-release-", suffix=".zip", delete=False
-        )
-        release_handle.write(package)
-        release_handle.flush()
-        release_zip = Path(release_handle.name)
-
-    if args.no_server:
-        return 0
-
+def _print_project_summary(project) -> None:
     summary = ", ".join(
         f"{resource['kind']}:{resource['id']}" for resource in project.manifest["resources"]
     )
@@ -60,17 +40,61 @@ def _cmd_run(args: argparse.Namespace) -> int:
         )
     else:
         print("[botlab] plan: runs via in-browser Pyodide (project uses Signal.action(modify=...))")
-    try:
+
+
+def _set_verbose(args: argparse.Namespace) -> None:
+    import os
+
+    if getattr(args, "verbose", False):
+        os.environ["BOTLAB_VERBOSE"] = "1"
+
+
+def _cmd_run(args: argparse.Namespace) -> int:
+    _set_verbose(args)
+    project_dir = Path(args.project_dir or ".").resolve()
+    project = load_project(project_dir)
+    if os.environ.get("BOTLAB_VERBOSE"):
+        _print_project_summary(project)
+    metadata = {"name": project.manifest["project"]["name"]}
+
+    if args.out:
+        package = create_release_package(project, metadata=metadata)
+        release_zip = Path(args.out).resolve()
+        release_zip.write_bytes(package)
+        print(f"[botlab] wrote {release_zip} ({len(package)} bytes)")
+        if args.no_server:
+            return 0
+        # --out serves the frozen artifact: the embed surface is what
+        # reviews it, since the editor debug loop always reads live sources.
         serve_project(
             project_dir,
             release_zip,
             args.host,
             args.port,
             open_browser=not args.no_browser,
+            entry="/embed.html",
         )
-    finally:
-        if not args.out:
-            release_zip.unlink(missing_ok=True)
+        return 0
+
+    # Debug loop: the provider rebuilds on source change, so the user edits
+    # and reloads the browser without restarting this command.
+    package = build_debug_release(project)
+    provider = DebugReleaseProvider(project_dir, package, _project_signature(project_dir))
+    if os.environ.get("BOTLAB_VERBOSE"):
+        print(
+            f"[botlab] debug release: {len(package)} bytes in memory (no zip written) — "
+            "edit the project, reload the page, the release rebuilds"
+        )
+    if args.no_server:
+        return 0
+    serve_project(
+        project_dir,
+        None,
+        args.host,
+        args.port,
+        open_browser=not args.no_browser,
+        release_provider=provider,
+    )
     return 0
 
 
@@ -103,6 +127,7 @@ def _cmd_ui(args: argparse.Namespace) -> int:
     if args.action == "status":
         target = ui_snapshot_dir()
         print(f"UI snapshot: {target}")
+        print(f"editor index.html present: {(target / 'index.html').is_file()}")
         print(f"embed.html present: {(target / 'embed.html').is_file()}")
         return 0
     if args.action == "sync":
@@ -119,13 +144,30 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    run = subparsers.add_parser("run", help="package a project and open the simulation runtime")
+    run = subparsers.add_parser(
+        "run",
+        help="debug-run a project from source in the browser simulation runtime",
+    )
     run.add_argument("project_dir", nargs="?", default=".", help="project directory (default: cwd)")
-    run.add_argument("--host", default="127.0.0.1", help="bind address (default: 127.0.0.1)")
+    run.add_argument("--host", default="0.0.0.0", help="bind address (default: 0.0.0.0, LAN-reachable)")
     run.add_argument("--port", type=int, default=0, help="bind port (default: random free port)")
-    run.add_argument("--out", help="write release.zip to this path instead of a temp file")
-    run.add_argument("--no-server", action="store_true", help="only build release.zip (--out required)")
+    run.add_argument(
+        "--out",
+        help="serve a release.zip exported to this path instead of the in-memory debug "
+        "release (disables rebuild-on-change)",
+    )
+    run.add_argument(
+        "--no-server",
+        action="store_true",
+        help="build the release and exit without serving (smoke test; no file written "
+        "unless --out is given)",
+    )
     run.add_argument("--no-browser", action="store_true", help="do not auto-open the browser")
+    run.add_argument(
+        "--verbose",
+        action="store_true",
+        help="print the compile summary (resources, plan size, release bytes)",
+    )
     run.set_defaults(func=_cmd_run)
 
     build = subparsers.add_parser(

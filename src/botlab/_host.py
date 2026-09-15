@@ -341,6 +341,12 @@ class HostSession:
         return [parameter["min"], parameter["max"]]
 
     def log(self, level, source, message):
+        # Info-level SDK chatter (sim.run(...) started) is compile detail the
+        # debug loop keeps behind --verbose; warnings and errors always print.
+        import os
+
+        if level == "info" and not os.environ.get("BOTLAB_VERBOSE"):
+            return
         print(f"[{level}] [{source}] {message}")
 
     # -- preset resolution ----------------------------------------------------

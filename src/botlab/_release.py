@@ -136,7 +136,9 @@ def _pack_resource(project_dir: Path, resource: dict, used: set[str]) -> list[di
     return entries
 
 
-def create_release_package(project: LoadedProject, metadata: dict | None = None) -> bytes:
+def create_release_package(
+    project: LoadedProject, metadata: dict | None = None, *, compression: str = "deflate"
+) -> bytes:
     """Build release.zip bytes for a loaded project.
 
     Compiled projects carry a ``compiledController`` plan and run without
@@ -148,7 +150,15 @@ def create_release_package(project: LoadedProject, metadata: dict | None = None)
     runtime receives the project directory as its asset inventory (served at
     ``/project/`` by the CLI), so meshes referenced by the MJCF resolve through
     the inventory the same way they do for workspace projects.
+
+    ``compression`` picks the zip method: ``"deflate"`` for publishable
+    packages (``botlab build``) and ``"stored"`` for the debug server, which
+    rebuilds the package in memory on every source change and cares about
+    build latency, not package size. The archive payload and integrity
+    digests are identical either way.
     """
+    if compression not in ("deflate", "stored"):
+        raise BotLabError(f"release compression must be 'deflate' or 'stored', got {compression!r}")
     compiled = None
     if project.compiled_plan is not None:
         from ._project import compiled_controller_envelope
@@ -209,8 +219,10 @@ def create_release_package(project: LoadedProject, metadata: dict | None = None)
 
     import io
 
+    zip_method = zipfile.ZIP_STORED if compression == "stored" else zipfile.ZIP_DEFLATED
+    zip_level = None if compression == "stored" else 6
     buffer = io.BytesIO()
-    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
+    with zipfile.ZipFile(buffer, "w", compression=zip_method, compresslevel=zip_level) as archive:
         archive.writestr("release.json", json.dumps(config, indent=2))
         for path, source in sorted(project.files.items()):
             archive.writestr(f"project/{path}", source)

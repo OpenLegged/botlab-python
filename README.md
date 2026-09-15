@@ -10,12 +10,25 @@ cd my-robot-project
 botlab run
 ```
 
-`botlab run` 会：
+`botlab run` 是纯调试循环，全程不写任何 zip 文件。它托起**完整的 BotLab 编辑器**
+（不是发布页）：左侧文件树、Monaco 编辑器、Console / Watch / Metrics 面板和线
+上 IDE 完全一致，只是工程来自本地目录而不是云端：
 
 1. 导入 `controller.py`，收集工程声明（资源、参数、频率）；
 2. 执行 `main.py`，把 `PolicyController` 的信号表达式降解成控制 plan；
-3. 打包成 BotLab release.zip（v3 格式，含完整性校验）；
-4. 起本地静态服务，托起 BotLab embed 运行时 + release 包，并自动打开浏览器。
+3. 在内存里组装 release（STORED 不压缩、同格式完整性校验），托管给浏览器；
+4. 起本地静态服务并自动打开浏览器，Vite 风格横幅打印可点击链接
+   （默认绑定 `0.0.0.0`，`Local` + `Network` 两条，局域网设备可访问）：
+   打开的 `/` 就是编辑器——本地快照的 `index.html` 带有
+   `window.BOTLAB_LOCAL_PROJECT` 标记（URL 不带任何后缀），编辑器据此从
+   `local-project.json` 实时读取本地目录装载工程；`/embed.html` 仍可手动
+   打开预览发布形态。
+
+启动输出保持 Vite 式的两三行（`microduck-project ready` + Local/Network 链接）；
+编译摘要（资源清单、plan 规模、包大小）收在 `--verbose` 之后。启动后**改源码、
+刷新页面**即可：编辑器重新读取本地目录，release 也会在子进程里重新编译，无需
+重启命令。要导出可发布/可上传的 `release.zip`（DEFLATED 压缩、落盘），用
+`botlab build`。
 
 CLI 完全通用：任何符合 BotLab 两文件契约（`main.py` + `controller.py`）的工程都能
 跑，不针对特定机器人或策略。
@@ -64,10 +77,10 @@ API 契约的完整文档见 BotLab 仓库的 `docs/api/`（Signal 表达式、`
 
 | 命令 | 作用 |
 |------|------|
-| `botlab run [DIR]` | 编译打包并在浏览器里运行工程（`--no-browser`、`--out release.zip`、`--host/--port`） |
+| `botlab run [DIR]` | 调试运行：源码内存编译 + 浏览器仿真，改源码后刷新页面即生效（不写 zip；`--verbose` 打印编译摘要；`--out` 可切换为落盘导出模式；`--no-browser`、`--host/--port`） |
 | `botlab build [DIR]` | 本地导出 `release.zip`（默认写到工程目录；`--out` 自定义路径）。产物与平台 `/d/<id>/` demo 发布包同格式，可直接交由平台托管 |
 | `botlab validate [DIR]` | 只做声明收集 + plan 编译 + 打包演练，不起服务 |
-| `botlab ui sync --botlab <path>` | 从一个 BotLab 构建产物同步 embed UI 快照 |
+| `botlab ui sync --botlab <path>` | 从一个 BotLab 构建产物同步完整 UI 快照（编辑器 + embed 运行时） |
 | `botlab ui status` | 查看当前内置 UI 快照状态 |
 
 ## 文档（给人和给 AI 的手册）
@@ -80,13 +93,16 @@ API 契约的完整文档见 BotLab 仓库的 `docs/api/`（Signal 表达式、`
 `botlab run` 默认绑定 `127.0.0.1` 的随机空闲端口；服务需要发送
 `Cross-Origin-Opener-Policy` / `Cross-Origin-Embedder-Policy` 隔离头（MuJoCo /
 ONNX Runtime Web 的 `SharedArrayBuffer` 依赖），代理或反代时必须保留这些头。
+静态资源请求不打印访问日志（一次页面加载数百个 chunk 是噪声）；错误（4xx/5xx）
+仍会打印，`log_request` 被禁用不影响 `send_error` 路径。
 
 ## UI 快照（`botlab/ui/`）
 
-包内自带的浏览器运行时来自 BotLab 的发布产物闭包（`embed.html` + `assets/` +
-`pyodide/` + `wasm/`，以 `dist/publish-assets.json` 为准），由 `botlab ui sync`
-从 BotLab 构建同步。快照里的 UI 就是 botlab 平台的前端——本地运行与平台发布的
-`/d/<id>/` demo 页共用同一运行时。
+包内自带的浏览器运行时是 BotLab 构建产物（`dist/`）的完整镜像（去掉 `d/` demo
+应用；`index.html` 里的统计脚本本地剥离），由 `botlab ui sync` 从 BotLab checkout
+同步。快照里的 UI 与 botlab 平台前端同源——本地调试的编辑器、线上 IDE 和
+`/d/<id>/` 发布页共用同一套运行时。快照目录被 gitignore（属于构建产物），打包时
+通过 hatch 的 force-include 进入 wheel。
 
 ## 运行机制
 

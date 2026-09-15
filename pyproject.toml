@@ -42,6 +42,10 @@ dev = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/botlab"]
+# The UI snapshot is gitignored (a verbatim copy of a BotLab build), so
+# hatchling's default VCS-aware exclusion would drop it from the wheel —
+# include it explicitly; ui sync regenerates it before packaging.
+force-include = { "src/botlab/ui" = "botlab/ui" }
 
 [tool.hatch.build.targets.sdist]
 include = ["src", "tests", "scripts", "README.md", "pyproject.toml"]
