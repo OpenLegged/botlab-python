@@ -445,14 +445,18 @@ def end_project_declaration() -> None:
     RUN_SESSION = None
 
 
-# -- botlab_host module surface (called by sdk.py) ---------------------------
+# -- botlab_host module surface (called by the vendored sdk/ package) ---------
 
 
-def declareResource(kind, rid, source, preset, provider, config):  # noqa: N802
+def declareResource(kind, rid, source, preset, provider, config, location=None):  # noqa: N802
+    # ``location`` (the declaring controller.py line) only feeds the browser
+    # host's error attribution; the offline collector has no use for it.
+    del location
     _active().declare_resource(kind, rid, source, preset, provider, config)
 
 
-def declareProject(name, control_hz, physics_hz, parameters):  # noqa: N802
+def declareProject(name, control_hz, physics_hz, parameters, location=None):  # noqa: N802
+    del location
     _active().declare_project(name, control_hz, physics_hz, parameters)
 
 
@@ -463,6 +467,11 @@ def requireResource(rid, kind):  # noqa: N802
 def resourceSource(rid):  # noqa: N802
     active = _active()
     return active.require_resource(rid, active._kind_of(rid))["source"]
+
+
+def resourceConfig(rid, field):  # noqa: N802
+    active = _active()
+    return active.require_resource(rid, active._kind_of(rid))["config"].get(str(field))
 
 
 class _ParameterRange:
@@ -535,5 +544,5 @@ def registerReset(proxy):  # noqa: N802
     raise BotLabError("Custom Controllers require the live Python runtime; declare a PolicyController instead.")
 
 
-def registerStep(proxy, robot_ids):  # noqa: N802
+def registerStep(proxy, robot_ids=None):  # noqa: N802
     raise BotLabError("Custom Controllers require the live Python runtime; declare a PolicyController instead.")

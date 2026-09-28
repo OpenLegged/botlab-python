@@ -21,6 +21,7 @@ import os
 import sys
 from pathlib import Path
 
+from . import __version__
 from ._debug import DebugReleaseProvider, _project_signature, build_debug_release
 from ._host import BotLabError
 from ._project import load_project
@@ -142,6 +143,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="botlab",
         description="Compile and run BotLab Python projects in the browser BotLab runtime.",
     )
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     run = subparsers.add_parser(

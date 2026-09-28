@@ -3,9 +3,9 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "botlab"
-version = "0.1.0"
-description = "BotLab Python SDK and CLI: declare robot controllers in Python, run them in the browser BotLab simulation runtime."
+name = "botlab-python"
+version = "0.2.0"
+description = "Python-first robot simulation and control in the browser."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "Proprietary" }
@@ -42,9 +42,9 @@ dev = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/botlab"]
-# The UI snapshot is gitignored (a verbatim copy of a BotLab build), so
-# hatchling's default VCS-aware exclusion would drop it from the wheel —
-# include it explicitly; ui sync regenerates it before packaging.
+# The UI snapshot is gitignored, so hatchling's default VCS-aware exclusion
+# would drop it from the wheel. It is a pruned BotLab runtime snapshot: ui sync
+# excludes demo apps plus the built-in templates and shared model catalogs.
 force-include = { "src/botlab/ui" = "botlab/ui" }
 
 [tool.hatch.build.targets.sdist]
@@ -62,7 +62,8 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"src/botlab/sdk.py" = ["E", "F", "W", "I", "UP", "B"]
+# The vendored SDK mirrors BotLab's browser source; keep its style verbatim.
+"src/botlab/sdk/**" = ["E", "F", "W", "I", "UP", "B"]
 
 [tool.pytest.ini_options]
 markers = ["e2e: browser end-to-end acceptance tests"]

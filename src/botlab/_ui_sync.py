@@ -2,9 +2,13 @@
 
 ``botlab run`` serves the full BotLab site out of one snapshot: the editor
 (``index.html``, the default debug surface with the complete IDE — console,
-watch, metrics, program catalog) plus the embed runtime (``embed.html``) for
-packaged releases. The snapshot is an exact mirror of ``dist/`` minus the
-``d/`` demo apps, so stale chunks from older builds never survive a sync.
+watch, metrics) plus the embed runtime (``embed.html``) for packaged releases.
+The snapshot copies the runtime closure from ``dist/`` but deliberately omits
+``d/`` demo apps and the top-level ``templates/`` / ``models/`` catalogs.
+Local projects provide their own assets through ``/project/``; bundling every
+example policy and robot model in the Python wheel would make the core package
+hundreds of megabytes larger. The target is recreated on every sync so stale
+chunks from older builds never survive.
 
 One deliberate local-only edit: the analytics snippets in ``index.html``
 (Umami + Baidu push) are stripped — they would neither load nor report under
@@ -21,9 +25,10 @@ from pathlib import Path
 
 from ._host import BotLabError
 
-# Demo apps shipped under dist/d/ have their own serving story; the CLI hosts
-# the BotLab editor and embed runtimes only.
-_SNAPSHOT_EXCLUDED_TOP_DIRS = {"d"}
+# Demo apps and built-in catalog assets have their own distribution story. The
+# CLI hosts the editor/runtime while the active project's assets are served
+# from its directory at /project/.
+_SNAPSHOT_EXCLUDED_TOP_DIRS = {"d", "models", "templates"}
 
 # Analytics blocks in the built index.html, anchored on their stable HTML
 # comments. Missing markers (a future index.html) leave the file untouched.
@@ -58,7 +63,7 @@ def _collect_source_files(dist: Path) -> list[Path]:
     while pending:
         for child in pending.pop().iterdir():
             if child.is_dir():
-                if child.name in _SNAPSHOT_EXCLUDED_TOP_DIRS:
+                if child.parent == dist and child.name in _SNAPSHOT_EXCLUDED_TOP_DIRS:
                     continue
                 pending.append(child)
                 continue

@@ -25,6 +25,7 @@ CLI 的错误全部是硬失败：缺什么、哪条契约破了、字段名是�
 | `requires unsupported node type` | plan 里有引擎白名单外节点 | SDK 版本与 BotLab 构造版本不匹配，重同步 UI/SDK |
 | `compiled controller does not match the current manifest` | 改了源码但 digest 过期 | 重新 build（正常流程不会触发） |
 | `UI snapshot is missing embed.html` | 包内无 UI 快照 | `botlab ui sync --botlab <BotLab 路径>` |
+| `UI snapshot is missing index.html under …/botlab/ui` | 源码 editable 安装：`ui/` 是 gitignore 的生成产物，新 clone 里没有 | 改用 `pip install botlab-python`（wheel 自带快照）；源码开发则先在 BotLab 仓 `npm run build`，再 `botlab ui sync --botlab <BotLab 路径>` |
 
 ## SDK 构图期（import controller 时）
 

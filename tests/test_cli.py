@@ -6,7 +6,18 @@ from __future__ import annotations
 import json
 import zipfile
 
+import pytest
+
 from botlab._cli import main
+
+
+def test_version_reports_package_version(capsys):
+    from botlab import __version__
+
+    with pytest.raises(SystemExit) as exit_info:
+        main(["--version"])
+    assert exit_info.value.code == 0
+    assert capsys.readouterr().out.strip() == f"botlab {__version__}"
 
 
 def test_build_writes_default_release_zip(project_dir, capsys, monkeypatch):
