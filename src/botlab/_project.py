@@ -22,6 +22,7 @@ import yaml
 
 from . import _host
 from ._host import PRESET_FILE_SUFFIX, BotLabError
+from ._presets import PRESETS
 
 STANDARD_PYTHON_MAIN = (
     "from botlab import Simulation\n"
@@ -84,20 +85,30 @@ def _preset_lookup(project_dir: Path):
     cache: dict[str, tuple[str, dict, bool]] = {}
 
     def lookup(preset_id: str):
-        if not preset_id.endswith(PRESET_FILE_SUFFIX):
-            return None  # built-in browser presets do not exist offline
         if preset_id in cache:
             return cache[preset_id]
-        if "/" in preset_id:
-            raise BotLabError(
-                f'BotLab resource preset "{preset_id}" must be a flat '
-                f'"<name>{PRESET_FILE_SUFFIX}" file next to controller.py.'
+        if preset_id.endswith(PRESET_FILE_SUFFIX):
+            if "/" in preset_id:
+                raise BotLabError(
+                    f'BotLab resource preset "{preset_id}" must be a flat '
+                    f'"<name>{PRESET_FILE_SUFFIX}" file next to controller.py.'
+                )
+            preset_path = project_dir / preset_id
+            if not preset_path.is_file():
+                raise BotLabError(
+                    f'BotLab resource preset file "{preset_id}" is not part of this project.'
+                )
+            kind, config = _parse_preset_file(preset_path)
+            entry = (kind, _host._json_value(config, f"preset {preset_id}"), True)
+        else:
+            built_in = PRESETS.get(preset_id)
+            if built_in is None:
+                return None
+            entry = (
+                built_in["kind"],
+                _host._json_value(built_in.get("config", {}), f"preset {preset_id}"),
+                True,
             )
-        preset_path = project_dir / preset_id
-        if not preset_path.is_file():
-            raise BotLabError(f'BotLab resource preset file "{preset_id}" is not part of this project.')
-        kind, config = _parse_preset_file(preset_path)
-        entry = (kind, _host._json_value(config, f"preset {preset_id}"), True)
         cache[preset_id] = entry
         return entry
 

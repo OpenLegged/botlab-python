@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "botlab-python"
-version = "0.2.0"
+version = "0.3.0"
 description = "Python-first robot simulation and control in the browser."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -33,11 +33,22 @@ Repository = "https://github.com/OpenLegged/botlab-python"
 
 [project.scripts]
 botlab = "botlab._cli:main"
+botlab-run = "botlab.sdk._runtime.run:main"
 
 [project.optional-dependencies]
+# Native headless simulation via `botlab-run`: native MuJoCo physics +
+# onnxruntime inference (CPU out of the box; GPU needs onnxruntime-gpu with
+# matching CUDA). Without these the CLI still compiles and packages projects.
+runtime = [
+  "numpy>=1.24",
+  "mujoco>=3.2",
+  "onnxruntime>=1.18",
+  "websockets>=12",
+]
 dev = [
   "pytest>=8.0",
   "ruff>=0.6",
+  "botlab-python[runtime]",
 ]
 
 [tool.hatch.build.targets.wheel]

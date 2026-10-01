@@ -1,11 +1,14 @@
-"""Static BotLab host for the offline CLI.
+"""Static BotLab host for the offline CLI and the native runtime.
 
 The browser runs ``botlab_host`` as a JS module wired into the simulation
 bridge. This module is its CPython counterpart: it collects the declarations
 a project's ``controller.py`` makes at import time, answers the few queries
 the SDK needs while building signal expressions (``actionDimension``,
 ``parameterRange``), and captures the compiled controller plan that
-``Simulation.run()`` registers.
+``Simulation.run()`` registers. The native runtime (``botlab-run``, the
+vendored ``sdk/_runtime/`` package) installs its session via
+``set_runtime_session`` before a project's ``main.py`` runs; runtime calls
+then delegate to that session instead of raising.
 
 It mirrors the TypeScript collector in BotLab
 (``src/domain/python/pythonDeclaredProject.ts``) field by field so the
@@ -15,6 +18,7 @@ manifest produced here is the same shape the browser produces.
 from __future__ import annotations
 
 import math
+from pathlib import Path
 from typing import Any
 
 DEFAULT_CONTROL_HZ = 50
@@ -445,6 +449,78 @@ def end_project_declaration() -> None:
     RUN_SESSION = None
 
 
+class _ProjectStateView:
+    """The flat project state the native runtime drives (``botlab-run``):
+    ``reset(directory)`` opens a fresh declaration session, importing
+    ``controller.py`` fills it, and ``manifest()``/``resource()`` read the
+    collected declarations in the shape ``sdk/_runtime/run.py`` consumes.
+    """
+
+    def __init__(self):
+        self.directory = None
+
+    def reset(self, directory=None):
+        from ._project import _preset_lookup
+
+        end_project_declaration()
+        self.directory = directory
+        if directory is not None:
+            begin_project_declaration(_preset_lookup(Path(directory)))
+
+    def _session(self) -> HostSession:
+        session = ACTIVE or RUN_SESSION
+        if session is None:
+            raise BotLabError("[botlab] project_state() has no declarations; reset(directory) first")
+        return session
+
+    def manifest(self):
+        session = self._session()
+        return {
+            "name": session._project_name
+            or Path(self.directory or ".").resolve().name,
+            "control_hz": session._control_hz if session._control_hz is not None else DEFAULT_CONTROL_HZ,
+            "physics_hz": session._physics_hz if session._physics_hz is not None else DEFAULT_PHYSICS_HZ,
+            "parameters": {pid: dict(value) for pid, value in session._parameters.items()},
+            "resources": [dict(item, config=dict(item["config"])) for item in session._resources],
+        }
+
+    def resource(self, resource_id, kind=None):
+        session = self._session()
+        rid = str(resource_id)
+        item = session.require_resource(rid, session._kind_of(rid))
+        if kind is not None and item["kind"] != str(kind):
+            raise BotLabError(f'[botlab] resource "{rid}" is {item["kind"]}, expected {kind}')
+        return item
+
+
+_project_state = _ProjectStateView()
+
+
+def project_state() -> _ProjectStateView:
+    """The declarations of the project the native runtime most recently reset."""
+    return _project_state
+
+
+# The native runtime (`botlab-run`) installs its session before the project's
+# main.py runs; None keeps every runtime call on its offline error.
+_runtime_session = None
+
+
+def set_runtime_session(session) -> None:
+    global _runtime_session
+    _runtime_session = session
+
+
+def _runtime_only(name, message):
+    def call(*args, **kwargs):
+        if _runtime_session is not None:
+            return getattr(_runtime_session, name)(*args, **kwargs)
+        raise BotLabError(message)
+
+    call.__name__ = name
+    return call
+
+
 # -- botlab_host module surface (called by the vendored sdk/ package) ---------
 
 
@@ -474,19 +550,11 @@ def resourceConfig(rid, field):  # noqa: N802
     return active.require_resource(rid, active._kind_of(rid))["config"].get(str(field))
 
 
-class _ParameterRange:
-    """JS-array-like wrapper: the SDK calls ``.to_py()`` on host results."""
-
-    def __init__(self, values):
-        self._values = values
-
-    def to_py(self):
-        return self._values
-
-
+# List-returning queries stay plain (no JsProxy-style wrapper): the SDK's
+# ``_host_value`` unwraps ``to_py`` when present and passes plain data through,
+# while the native runtime reads these directly and expects Python lists.
 def parameterRange(name):  # noqa: N802
-    values = _active().parameter_range(name)
-    return None if values is None else _ParameterRange(values)
+    return _active().parameter_range(name)
 
 
 def actionDimension(rid):  # noqa: N802
@@ -494,11 +562,11 @@ def actionDimension(rid):  # noqa: N802
 
 
 def defaultJointPositions(rid):  # noqa: N802
-    return _ParameterRange(_active().default_joint_positions(rid))
+    return _active().default_joint_positions(rid)
 
 
 def controlParameter(rid, field):  # noqa: N802
-    return _ParameterRange(_active().control_parameter(rid, field))
+    return _active().control_parameter(rid, field)
 
 
 def parameter(name):  # noqa: N802
@@ -506,6 +574,8 @@ def parameter(name):  # noqa: N802
 
 
 def registerPolicyController(plan, modifier=None):  # noqa: N802
+    if _runtime_session is not None:
+        return _runtime_session.registerPolicyController(plan, modifier)
     _active().register_policy_controller(plan, modifier)
 
 
@@ -513,36 +583,59 @@ def log(level, source, message):  # noqa: N802
     _active().log(level, source, message)
 
 
-def requestReset(reason="Python controller requested reset"):  # noqa: N802
-    raise BotLabError(
-        "The offline packager never steps the simulation; "
-        f"requestReset({reason!r}) is a browser-runtime call."
-    )
-
-
-def observe(rid):  # noqa: N802
-    raise BotLabError("Robot.observe() requires the live simulation runtime; the offline packager never steps.")
-
-
-def observeSensor(rid):  # noqa: N802
-    raise BotLabError("Sensor.observe() requires the live simulation runtime; the offline packager never steps.")
-
-
-def applyAction(rid, action):  # noqa: N802
-    raise BotLabError("Robot.apply_action() requires the live simulation runtime; the offline packager never steps.")
-
-
-async def predictModel(rid, values):  # noqa: N802
-    raise BotLabError("Model.predict() requires the live ONNX runtime; the offline packager never infers.")
-
-
-async def updateHeightfield(rid, values):  # noqa: N802
-    raise BotLabError("Scene.update_heightfield() requires the live simulation runtime.")
-
-
 def registerReset(proxy):  # noqa: N802
+    if _runtime_session is not None:
+        return _runtime_session.registerReset(proxy)
     raise BotLabError("Custom Controllers require the live Python runtime; declare a PolicyController instead.")
 
 
 def registerStep(proxy, robot_ids=None):  # noqa: N802
+    if _runtime_session is not None:
+        return _runtime_session.registerStep(proxy, robot_ids)
     raise BotLabError("Custom Controllers require the live Python runtime; declare a PolicyController instead.")
+
+
+# Runtime calls the SDK makes from a running simulation. With a session
+# installed they delegate 1:1 (the session owns the async shapes — e.g.
+# predictModel returns the coroutine the SDK awaits); without one they keep
+# the offline packager's hard errors.
+observe = _runtime_only(
+    "observe",
+    "Robot.observe() requires the live simulation runtime; the offline packager never steps.",
+)
+observeSensor = _runtime_only(
+    "observeSensor",
+    "Sensor.observe() requires the live simulation runtime; the offline packager never steps.",
+)
+applyAction = _runtime_only(
+    "applyAction",
+    "Robot.apply_action() requires the live simulation runtime; the offline packager never steps.",
+)
+predictModel = _runtime_only(
+    "predictModel",
+    "Model.predict() requires the live ONNX runtime; the offline packager never infers.",
+)
+readMujoco = _runtime_only(
+    "readMujoco",
+    "Robot mujoco queries require the live simulation runtime; the offline packager never steps.",
+)
+loadMotion = _runtime_only(
+    "loadMotion",
+    "Motion.load() requires the live simulation runtime; the offline packager never loads trajectories.",
+)
+updateHeightfield = _runtime_only(
+    "updateHeightfield",
+    "Scene.update_heightfield() requires the live simulation runtime.",
+)
+updateMetrics = _runtime_only(
+    "updateMetrics",
+    "Metrics updates require the live simulation runtime.",
+)
+updateDiagnostics = _runtime_only(
+    "updateDiagnostics",
+    "Diagnostics updates require the live simulation runtime.",
+)
+requestReset = _runtime_only(
+    "requestReset",
+    "Simulation.request_reset() requires the live simulation runtime; the offline packager never resets.",
+)

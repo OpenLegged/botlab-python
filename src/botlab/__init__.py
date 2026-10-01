@@ -8,7 +8,9 @@ BotLab simulation runtime.
 The SDK implementation lives in the ``sdk/`` subpackage — a verbatim mirror of
 the ``botlab`` package BotLab serves in the browser, re-synced with
 ``scripts/sync_sdk.py`` — so a project runs the same way offline and online.
-The static host that collects declarations lives in ``_host.py``.
+The mirror also carries the native headless runtime (``sdk/_runtime/``,
+``botlab-run``); the host that collects declarations and bridges that runtime
+lives in ``_host.py``.
 """
 
 import sys
@@ -178,4 +180,4 @@ __all__ = [
     "where",
 ]
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"

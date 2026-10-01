@@ -102,7 +102,7 @@ def test_parameter_range_feeds_sdk_queries(session):
         {"speed": {"default": 0.0, "range": [-1.0, 1.0], "step": 0.1}},
     )
     session.finish_declaration()
-    assert _host.parameterRange("speed").to_py() == [-1.0, 1.0]
+    assert _host.parameterRange("speed") == [-1.0, 1.0]
     assert _host.parameterRange("missing") is None
     assert _host.parameter("speed") == 0.0
     assert _host.actionDimension("Robot") == 3
