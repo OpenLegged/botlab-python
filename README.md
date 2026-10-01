@@ -4,7 +4,8 @@ BotLab's Python SDK and command-line interface. Declare robot projects with
 `project()`, `Robot`, `Model`, `Sensor`, `Motion`, and `Scene` in
 `controller.py`, express control logic as composable signals, and run the
 project locally in BotLab's browser-based simulation environment with one
-command.
+command. The same package also ships a native headless runtime (`botlab-run`)
+that executes the project with real MuJoCo and ONNX Runtime on your machine.
 
 ```bash
 pip install botlab-python
@@ -97,8 +98,45 @@ resource preset fields.
 | `botlab run [DIR]` | Compile the source and open the project in the browser simulator. Refresh after editing to rebuild. Does not write a zip unless `--out` is provided. Supports `--verbose`, `--no-browser`, `--host`, and `--port`. |
 | `botlab build [DIR]` | Export `release.zip` to the project directory or a path selected with `--out`. The output uses the same format as BotLab's hosted `/d/<id>/` demos. |
 | `botlab validate [DIR]` | Collect declarations, compile the plan, and build the release in memory without starting a server. |
+| `botlab-run [DIR]` | Native headless run: real MuJoCo physics + ONNX Runtime inference in CPython, no browser involved. Requires the `runtime` extra. |
 | `botlab ui sync --botlab <path>` | Synchronize the editor and embed runtime from a BotLab build, excluding built-in templates and shared robot models. |
 | `botlab ui status` | Show the status of the bundled UI snapshot. |
+
+## Native local runtime (`botlab-run`)
+
+`botlab run` executes the simulation in the browser (MuJoCo WASM + ONNX
+Runtime Web). `botlab-run` is the other way around: everything runs natively
+in this CPython process — native `mujoco` physics, `onnxruntime` inference,
+NumPy signal math — and no browser is involved unless you explicitly open a
+read-only display stream.
+
+```bash
+pip install "botlab-python[runtime]"
+BOTLAB_STEPS=500 botlab-run my-robot-project
+```
+
+- `BOTLAB_STEPS=<n>` caps the run at `n` control steps and prints the
+  completed count to stderr; without it the loop runs until interrupted.
+- Robot/scene sources resolve against the project directory first, then the
+  shared assets root (`../..`), so BotLab templates that reference
+  `models/...` trees run as-is.
+- Projects using built-in resource presets (e.g. `g1-hiking-robot`) work: the
+  registry is vendored as `botlab/_presets.py` and resolved offline.
+- Headless depth/RGB cameras need a working EGL driver: start with
+  `MUJOCO_GL=egl`. GPU inference needs `onnxruntime-gpu` matching your local
+  CUDA/cuDNN; CPU works out of the box.
+- Without the `runtime` extra the CLI still compiles and packages projects;
+  `botlab-run` fails up front listing the missing packages and the install
+  command.
+
+`BOTLAB_DISPLAY=1` (optionally `BOTLAB_DISPLAY_PORT=<port>`) opens a
+loopback-only WebSocket that streams one metadata frame plus one
+little-endian float32 frame (`[time, *qpos, *qvel]`) per control step. The
+runner prints a token URL like `ws://127.0.0.1:<port>/display/<token>`; the
+browser embed viewer accepts it as the `?ws=` parameter (see BotLab's
+"local python runtime" guide). The socket validates browser origins, limits
+frame sizes, and rejects every client write — it is a local monitoring
+surface, not a remote-control interface.
 
 ## Documentation
 
@@ -151,7 +189,8 @@ Current constraints:
 - Legacy projects with a non-empty `botlab.yaml` are not supported by the CLI;
   Python declarations are the only CLI entry point.
 - Project assets must use project-relative paths and must exist in the project
-  directory.
+  directory. (`botlab-run` additionally resolves the shared assets root, but
+  `botlab build`/`validate` still require self-contained projects.)
 
 ## Development
 
@@ -160,6 +199,10 @@ uv venv
 uv pip install -e '.[dev]'
 pytest
 ```
+
+`[dev]` includes the `runtime` extras (mujoco, onnxruntime, numpy, websockets)
+so the native `botlab-run` tests run; a bare
+`uv pip install -e .` skips them and those tests skip too.
 
 Editable installs do not include the UI snapshot: `src/botlab/ui/` is
 Git-ignored build output, so `botlab run` and `botlab build` fail with
@@ -170,10 +213,14 @@ the frontend in a BotLab checkout (`npm install && npm run build`), then run
 needs no extra step.
 
 `src/botlab/sdk/` is a verbatim mirror of the `botlab` package in the BotLab
-repository (`src/domain/python/botlab/`) so the same SDK runs in CPython and
-the browser. Re-sync it after BotLab-side SDK changes with
-`python scripts/sync_sdk.py --botlab <BotLab checkout>`. `_host.py` is the
-CPython counterpart of the browser's JavaScript bridge.
+repository (`src/domain/python/botlab/`): its flat modules are the browser
+SDK and its `_runtime/` subpackage is the native runner behind `botlab-run`.
+The generated built-in preset registry (`botlab_presets.py` upstream) is
+mirrored as `src/botlab/_presets.py`. Re-sync everything after BotLab-side
+changes with `python scripts/sync_sdk.py --botlab <BotLab checkout>`.
+`_host.py` is the CPython counterpart of the browser's JavaScript bridge; the
+native runtime installs its session into it via `set_runtime_session` before
+a project's `main.py` runs.
 
 ## License
 
