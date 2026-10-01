@@ -158,6 +158,12 @@ def test_run_verbose_prints_compile_summary(project_dir, capsys, monkeypatch):
     monkeypatch.setenv("BOTLAB_VERBOSE", "1")
     assert main(["run", str(project_dir), "--no-server"]) == 0
     out = capsys.readouterr().out
-    assert "debug release" in out
     assert "plan:" in out
     assert "project" in out
+
+
+def test_run_browser_verbose_prints_debug_release(project_dir, capsys, monkeypatch):
+    monkeypatch.setenv("BOTLAB_VERBOSE", "1")
+    assert main(["run", str(project_dir), "--browser", "--no-server"]) == 0
+    out = capsys.readouterr().out
+    assert "debug release" in out

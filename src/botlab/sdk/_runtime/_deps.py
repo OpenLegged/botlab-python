@@ -11,7 +11,7 @@ import importlib
 
 RUNTIME_REQUIREMENTS = ("numpy", "mujoco", "onnxruntime", "websockets")
 
-_INSTALL_COMMAND = 'pip install "botlab[runtime]"'
+_INSTALL_COMMAND = 'pip install "botlab-python[runtime]"'
 
 
 class RuntimeDependenciesError(RuntimeError):

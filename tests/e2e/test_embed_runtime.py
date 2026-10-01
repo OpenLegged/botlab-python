@@ -31,6 +31,7 @@ def cli_server():
             "botlab._cli",
             "run",
             MICRODUCK_TEMPLATE,
+            "--browser",
             "--port",
             str(PORT),
             "--no-browser",

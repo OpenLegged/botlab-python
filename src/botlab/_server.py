@@ -250,6 +250,37 @@ def print_startup_banner(project_name: str, base_url: str, entry: str, host: str
         print(line, flush=True)
 
 
+def start_project_server(
+    project_dir: Path,
+    release_zip: Path | None,
+    host: str,
+    port: int,
+    *,
+    ui_dir: Path | None = None,
+    release_provider: Callable[[], bytes] | None = None,
+):
+    """Build (but do not serve) the UI server; returns (httpd, base_url)."""
+    if (release_zip is None) == (release_provider is None):
+        raise ValueError("start_project_server requires exactly one of release_zip or release_provider")
+    ui_dir = ui_dir or ui_snapshot_dir()
+    if not (ui_dir / "index.html").is_file():
+        raise FileNotFoundError(
+            f"BotLab UI snapshot is missing index.html under {ui_dir}. "
+            "Run `botlab ui sync --botlab <BotLab checkout>` first."
+        )
+
+    handler = BotlabUIRequestHandler
+    handler.directory = str(ui_dir)
+    httpd = _run_server(host, port, handler)
+    httpd.botlab_ui_dir = ui_dir  # type: ignore[attr-defined]
+    httpd.botlab_release_zip = release_zip  # type: ignore[attr-defined]
+    httpd.botlab_release_provider = release_provider  # type: ignore[attr-defined]
+    httpd.botlab_project_dir = project_dir.resolve()  # type: ignore[attr-defined]
+    bound_host, bound_port = httpd.socket.getsockname()
+    displayed_host = "localhost" if bound_host == "0.0.0.0" else bound_host
+    return httpd, f"http://{displayed_host}:{bound_port}"
+
+
 def serve_project(
     project_dir: Path,
     release_zip: Path | None,
@@ -261,28 +292,17 @@ def serve_project(
     release_provider: Callable[[], bytes] | None = None,
     entry: str = "/",
 ) -> str:
-    if (release_zip is None) == (release_provider is None):
-        raise ValueError("serve_project requires exactly one of release_zip or release_provider")
-    ui_dir = ui_dir or ui_snapshot_dir()
-    if not (ui_dir / "index.html").is_file():
-        raise FileNotFoundError(
-            f"BotLab UI snapshot is missing index.html under {ui_dir}. "
-            "Run `botlab ui sync --botlab <BotLab checkout>` first."
-        )
-
-    handler = BotlabUIRequestHandler
-    handler.directory = str(ui_dir)
-    httpd = _run_server(host, port, handler)
+    httpd, base_url = start_project_server(
+        project_dir,
+        release_zip,
+        host,
+        port,
+        ui_dir=ui_dir,
+        release_provider=release_provider,
+    )
+    editor_url = f"{base_url}{entry}"
+    print_startup_banner(project_dir.name, base_url, entry, host=host)
     with httpd:
-        httpd.botlab_ui_dir = ui_dir  # type: ignore[attr-defined]
-        httpd.botlab_release_zip = release_zip  # type: ignore[attr-defined]
-        httpd.botlab_release_provider = release_provider  # type: ignore[attr-defined]
-        httpd.botlab_project_dir = project_dir.resolve()  # type: ignore[attr-defined]
-        bound_host, bound_port = httpd.socket.getsockname()
-        displayed_host = "localhost" if bound_host == "0.0.0.0" else bound_host
-        base_url = f"http://{displayed_host}:{bound_port}"
-        editor_url = f"{base_url}{entry}"
-        print_startup_banner(project_dir.name, base_url, entry, host=host)
         if open_browser:
             webbrowser.open(editor_url)
         try:

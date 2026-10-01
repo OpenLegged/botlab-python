@@ -16,3 +16,6 @@ src/botlab/ui/
 # Tooling
 .pytest_cache/
 .ruff_cache/
+
+# Local verification artifacts (screenshots, logs, scratch scripts)
+tmp/

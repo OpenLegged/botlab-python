@@ -144,3 +144,64 @@ def test_native_run_rejects_nonexistent_robot_source(tmp_path: Path):
     result = _run_native(project, "BOTLAB_STEPS=3")
     assert result.returncode != 0
     assert "was not found" in (result.stderr + result.stdout)
+
+
+def _ui_snapshot_present() -> bool:
+    from botlab._server import ui_snapshot_dir
+
+    return (ui_snapshot_dir() / "index.html").is_file()
+
+
+def test_run_browser_flag_parses(project_dir):
+    from botlab._cli import build_parser
+
+    args = build_parser().parse_args(["run", str(project_dir), "--browser", "--no-server"])
+    assert args.browser is True
+
+
+def test_require_native_runtime_suggests_browser_fallback(monkeypatch):
+    from botlab import _native
+    from botlab.sdk._runtime import _deps
+
+    class FakeProbe:
+        available = ("numpy",)
+        missing = ("mujoco", "onnxruntime")
+
+    monkeypatch.setattr(_deps, "probe_runtime_deps", lambda: FakeProbe())
+    with pytest.raises(Exception, match=r"--browser"):
+        _native.require_native_runtime()
+
+
+MICRODUCK_TEMPLATE = Path("/home/xiangyk/Project/BotLab/public/templates/microduck")
+
+
+@pytest.mark.skipif(
+    importlib.util.find_spec("mujoco") is None
+    or not _ui_snapshot_present()
+    or not MICRODUCK_TEMPLATE.is_dir(),
+    reason="runtime extras, UI snapshot, or the botlab checkout missing",
+)
+def test_cli_run_default_is_native_with_viewer():
+    # A PolicyController project: the CLI compile contract (main.py runs
+    # offline to capture the plan) only accepts compilable controllers.
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "botlab._cli",
+            "run",
+            str(MICRODUCK_TEMPLATE),
+            "--no-browser",
+            "--port",
+            "0",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=180,
+        env={**os.environ, "BOTLAB_STEPS": "30"},
+    )
+    combined = result.stdout + result.stderr
+    assert result.returncode == 0, combined
+    assert "is running natively" in combined
+    assert "embed.html?ws=" in combined
+    assert "completed 30 control steps" in combined
