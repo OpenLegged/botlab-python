@@ -101,11 +101,34 @@ resource preset fields.
 | Command | Description |
 | --- | --- |
 | `botlab run [DIR]` | Compile and run natively (local MuJoCo + ONNX Runtime), opening the browser as a read-only `?ws=` viewer. `--browser` switches to the editor debug loop where the browser executes the project. Neither writes a zip unless `--out` is provided. Supports `--verbose`, `--no-browser`, `--host`, and `--port`. |
-| `botlab build [DIR]` | Export `release.zip` to the project directory or a path selected with `--out`. The output uses the same format as BotLab's hosted `/d/<id>/` demos. |
+| `botlab build [DIR]` | Export `release.zip` to the project directory or a path selected with `--out`. The output uses the same format as BotLab's hosted `/d/<id>/` demos. `--site <dir>` additionally assembles a self-contained static site (see below). |
 | `botlab validate [DIR]` | Collect declarations, compile the plan, and build the release in memory without starting a server. |
 | `botlab-run [DIR]` | Native headless run without the viewer server: the same runner `botlab run` drives, started directly. Requires the `runtime` extra. |
 | `botlab ui sync --botlab <path>` | Synchronize the editor and embed runtime from a BotLab build, excluding built-in templates and shared robot models. |
 | `botlab ui status` | Show the status of the bundled UI snapshot. |
+| `botlab docs` | Print where the bundled docs (component reference, decision table, error guide) live in this install. |
+
+## Standalone site (`botlab build --site <dir>`)
+
+`botlab build --site docs/demo` writes a directory you can push to any static
+host — GitHub Pages included — next to the `release.zip`:
+
+```text
+docs/demo/
+├── index.html        ← the embed runtime entry, renamed
+├── assets/, wasm/    ← the runtime closure scanned from the bundled UI snapshot
+├── project/          ← the whole project directory (robot MJCF, meshes, …)
+└── release.zip       ← fetched by the page itself
+```
+
+Every runtime URL is page-relative, so the site works from a sub-path such as
+`user.github.io/<repo>/` and needs no special response headers (the embed
+runtime is single-threaded). Visitors can drag the robot, drive it with the
+keyboard, and switch policies without installing anything.
+
+The project must be self-contained — every resource under the project
+directory. A package that still needs a live-Python (`modify=…`) controller is
+rejected with a hint, matching what the embed runtime itself would do.
 
 ## Native local runtime (`botlab run`, `botlab-run`)
 

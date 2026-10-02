@@ -8,7 +8,10 @@
   assets straight from the directory. No zip file is written either way.
 - ``botlab build [PROJECT_DIR]`` — export release.zip locally (no server, no
   upload); the same package the platform's ``/d/<id>/`` demos are served from.
-- ``botlab validate`` / ``botlab ui`` — packaging dry-run and UI snapshot tools.
+  ``--site <dir>`` assembles a self-contained static site around it instead
+  (push the directory to GitHub Pages and the demo runs from any sub-path).
+- ``botlab validate`` / ``botlab ui`` / ``botlab docs`` — packaging dry-run,
+  UI snapshot tools, and the bundled docs location.
 
 Any standard two-file BotLab project works; nothing here knows about a specific
 robot or policy.
@@ -123,6 +126,17 @@ def _cmd_build(args: argparse.Namespace) -> int:
         project,
         metadata={"name": project.manifest["project"]["name"]},
     )
+    if args.site:
+        from ._site import build_site_directory
+
+        stats = build_site_directory(project_dir, package, Path(args.site).resolve())
+        print(
+            f"[botlab] wrote {stats['out_dir']} ({stats['files']} files, "
+            f"{stats['total_bytes']} bytes) for project {stats['project']!r}"
+        )
+        print("[botlab] serve the directory as-is (e.g. push it to GitHub Pages)")
+        if not args.out:
+            return 0
     output = Path(args.out).resolve() if args.out else project_dir / "release.zip"
     if output.parent != project_dir and not output.parent.exists():
         raise BotLabError(f"output directory does not exist: {output.parent}")
@@ -225,6 +239,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     build.add_argument("project_dir", nargs="?", default=".", help="project directory (default: cwd)")
     build.add_argument("--out", help="output path for release.zip (default: <project>/release.zip)")
+    build.add_argument(
+        "--site",
+        help="also assemble a self-contained static site directory at this path "
+        "(serve it as-is, e.g. on GitHub Pages); without --out no separate "
+        "release.zip is written",
+    )
     build.set_defaults(func=_cmd_build)
 
     validate = subparsers.add_parser("validate", help="apply a project and build its release in memory")
