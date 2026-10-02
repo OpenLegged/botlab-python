@@ -15,8 +15,9 @@ jobs:
     env:
       # Fresh clones have no src/botlab/ui snapshot (gitignored, ~199 MB,
       # regenerated with `botlab ui sync`); tests must pass without it. The
-      # wheel itself is only ever built on a checkout that has the snapshot —
-      # never in CI, which would silently ship a broken package.
+      # CI builds an explicitly incomplete source wheel for install-contract
+      # tests only. A real candidate wheel must pass scripts/verify_wheel.py
+      # without --source-wheel and separate browser acceptance before upload.
       BOTLAB_ALLOW_MISSING_UI: "1"
     steps:
       - uses: actions/checkout@v4
@@ -37,3 +38,8 @@ jobs:
 
       - name: Test
         run: uv run pytest
+
+      - name: Verify non-editable source wheel contract (no UI; not a release gate)
+        run: |
+          uv build --wheel --out-dir tmp/source-wheel
+          uv run --no-sync python scripts/verify_wheel.py tmp/source-wheel/*.whl --source-wheel --out tmp/source-wheel-check

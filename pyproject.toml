@@ -65,6 +65,7 @@ include = [
   "src",
   "tests",
   "scripts",
+  "docs",
   "hatch_build.py",
   "README.md",
   "pyproject.toml",

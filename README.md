@@ -262,6 +262,38 @@ changes with `python scripts/sync_sdk.py --botlab <BotLab checkout>`.
 native runtime installs its session into it via `set_runtime_session` before
 a project's `main.py` runs.
 
+## Candidate wheel acceptance
+
+Before uploading a release, verify the **exact wheel to be uploaded**, including
+its real synchronized UI snapshot. From this checkout, with `uv` on PATH:
+
+```bash
+python scripts/verify_wheel.py dist/pypi-0.3.0/botlab_python-0.3.0-py3-none-any.whl \
+  --out tmp/wheel-acceptance-0.3.0
+```
+
+Use a new output directory for each run. The command installs that wheel with
+`[runtime]` into a fresh isolated venv, checks the installed docs, UI and both
+CLI entrypoints, then runs `docs`, `ui status`, `validate`, a bounded real native
+MuJoCo simulation, `build`, native `run --no-browser --port 0`, and `build --site`.
+It uses a generated self-contained `main.py` / `controller.py` project with local
+MJCF; no BotLab checkout, existing venv, fixed machine path, or fixed port is
+required. It does not rebuild, modify, or upload the input wheel.
+
+`report.json` records the input SHA-256, each command's exit code and the site
+directory; command output is saved as separate logs. Browser acceptance is a
+separate required step: serve `site/` using an ordinary static server, open it
+at a nested URL without isolation headers, and verify the robot runs and can
+be dragged. The script deliberately records `browser_verified: false`.
+
+CI additionally runs this command with `--source-wheel` against a non-editable
+wheel built from the public checkout. This checks docs, CLI, compilation and
+native MuJoCo without UI or site assembly; **it is not the candidate release
+gate**. `BOTLAB_ALLOW_MISSING_UI=1` remains the explicit contributor/CI build
+override; it never permits missing bundled docs. The sdist includes docs for
+source installs but has no bundled UI snapshot. Release uploads remain wheel
+only; this verification command does not upload an sdist or any other artifact.
+
 ## License
 
 Proprietary — same as the main BotLab repository.

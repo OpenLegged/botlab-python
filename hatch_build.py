@@ -17,6 +17,7 @@ from hatchling.builders.hooks.plugin.interface import BuildHookInterface
 
 _UI_SNAPSHOT = ("src/botlab/ui", "botlab/ui")
 _DOCS = ("docs", "botlab/docs")
+_REQUIRED_DOCS = ("component-reference.md", "decision-table.md", "error-guide.md")
 
 
 class BotlabBuildHook(BuildHookInterface):
@@ -33,5 +34,11 @@ class BotlabBuildHook(BuildHookInterface):
                 "BOTLAB_ALLOW_MISSING_UI=1 when you only need an installable "
                 "package (CI, contributor checkout)."
             )
-        if (root / _DOCS[0]).is_dir():
-            force_include[_DOCS[0]] = _DOCS[1]
+        missing_docs = [name for name in _REQUIRED_DOCS if not (root / _DOCS[0] / name).is_file()]
+        if missing_docs:
+            raise SystemExit(
+                "Required bundled docs are missing: " + ", ".join(missing_docs)
+                + ". Restore docs/ before building; BOTLAB_ALLOW_MISSING_UI only "
+                "permits a contributor/CI wheel without the UI snapshot."
+            )
+        force_include[_DOCS[0]] = _DOCS[1]
