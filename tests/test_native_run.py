@@ -175,7 +175,8 @@ def test_require_native_runtime_suggests_browser_fallback(monkeypatch):
         _native.require_native_runtime()
 
 
-MICRODUCK_TEMPLATE = Path("/home/xiangyk/Project/BotLab/public/templates/microduck")
+BOTLAB_CHECKOUT = Path(os.environ.get("BOTLAB_CHECKOUT", REPO_ROOT.parent / "BotLab"))
+MICRODUCK_TEMPLATE = BOTLAB_CHECKOUT / "public/templates/microduck"
 
 
 @pytest.mark.skipif(

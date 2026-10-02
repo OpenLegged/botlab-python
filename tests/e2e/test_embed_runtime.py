@@ -7,52 +7,76 @@ a server, or standalone via the fixture below.
 
 from __future__ import annotations
 
+import os
+import re
 import subprocess
+import threading
 import time
-import urllib.request
+from pathlib import Path
 
 import pytest
 
 pytestmark = pytest.mark.e2e
 
-BOTLAB_CHECKOUT = "/home/xiangyk/Project/BotLab"
-MICRODUCK_TEMPLATE = f"{BOTLAB_CHECKOUT}/public/templates/microduck"
-PORT = 8931
+BOTLAB_CHECKOUT = Path(os.environ.get("BOTLAB_CHECKOUT", Path(__file__).resolve().parents[3] / "BotLab"))
+MICRODUCK_TEMPLATE = BOTLAB_CHECKOUT / "public/templates/microduck"
 
 
 @pytest.fixture(scope="module")
 def cli_server():
     import sys
 
+    if not MICRODUCK_TEMPLATE.is_dir():
+        pytest.skip("set BOTLAB_CHECKOUT to a BotLab checkout with the MicroDuck template")
+    output: list[str] = []
     process = subprocess.Popen(
         [
             sys.executable,
             "-m",
             "botlab._cli",
             "run",
-            MICRODUCK_TEMPLATE,
+            str(MICRODUCK_TEMPLATE),
             "--browser",
             "--port",
-            str(PORT),
+            "0",
             "--no-browser",
         ],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
     )
+    assert process.stdout is not None
+
+    def pump():
+        for line in process.stdout:
+            output.append(line)
+
+    thread = threading.Thread(target=pump, daemon=True)
+    thread.start()
+    url = None
     deadline = time.monotonic() + 15
     while time.monotonic() < deadline:
-        try:
-            urllib.request.urlopen(f"http://127.0.0.1:{PORT}/embed.html", timeout=1)
+        for line in output:
+            match = re.search(r"http://localhost:\d+/", line)
+            if match:
+                url = match.group(0) + "embed.html"
+        if url or process.poll() is not None:
             break
-        except OSError:
-            time.sleep(0.2)
-    else:
+        time.sleep(0.2)
+    if url is None:
         process.kill()
-        pytest.fail("botlab run server did not start")
-    yield f"http://127.0.0.1:{PORT}/embed.html"
-    process.terminate()
-    process.wait(timeout=10)
+        process.wait(timeout=10)
+        pytest.fail("botlab run server did not start:\n" + "".join(output))
+    try:
+        yield url
+    finally:
+        process.terminate()
+        try:
+            process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=10)
+        thread.join(timeout=1)
 
 
 @pytest.fixture(scope="module")

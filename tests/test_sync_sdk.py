@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import runpy
 import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -38,13 +39,14 @@ def run_sync(upstream: Path, dist_root: Path) -> int:
         Path(__file__).resolve().parent.parent / "scripts" / "sync_sdk.py",
         scripts / "sync_sdk.py",
     )
-    result = runpy.run_path(str(scripts / "sync_sdk.py"), run_name="not_main")
-    # The script resolves its target from its own location; point it at the
-    # synthetic distribution before calling main.
-    result["REPO_ROOT"] = dist_root
-    result["TARGET_DIR"] = dist_root / "src" / "botlab" / "sdk"
-    result["PRESETS_TARGET"] = dist_root / "src" / "botlab" / "_presets.py"
-    return result["main"]()
+    result = subprocess.run(
+        [sys.executable, str(scripts / "sync_sdk.py"), "--botlab", str(upstream)],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    print(result.stdout + result.stderr)
+    return result.returncode
 
 
 @pytest.fixture()

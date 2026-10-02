@@ -7,22 +7,26 @@ a read-only display client. Requires a botlab checkout with a fresh
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import sys
 import threading
 import time
+from pathlib import Path
 
 import pytest
 
 pytestmark = pytest.mark.e2e
 
-BOTLAB_CHECKOUT = "/home/xiangyk/Project/BotLab"
-MICRODUCK_TEMPLATE = f"{BOTLAB_CHECKOUT}/public/templates/microduck"
+BOTLAB_CHECKOUT = Path(os.environ.get("BOTLAB_CHECKOUT", Path(__file__).resolve().parents[3] / "BotLab"))
+MICRODUCK_TEMPLATE = BOTLAB_CHECKOUT / "public/templates/microduck"
 
 
 @pytest.fixture(scope="module")
 def native_run():
+    if not MICRODUCK_TEMPLATE.is_dir():
+        pytest.skip("set BOTLAB_CHECKOUT to a BotLab checkout with the MicroDuck template")
     output: list[str] = []
 
     process = subprocess.Popen(
@@ -31,7 +35,7 @@ def native_run():
             "-m",
             "botlab._cli",
             "run",
-            MICRODUCK_TEMPLATE,
+            str(MICRODUCK_TEMPLATE),
             "--port",
             "0",
             "--no-browser",
