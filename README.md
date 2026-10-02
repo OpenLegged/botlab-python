@@ -152,11 +152,16 @@ surface, not a remote-control interface.
 
 ## Documentation
 
-- [Component reference](docs/component-reference.md) — all public SDK symbols
-  and their contracts.
-- [Decision table](docs/decision-table.md) — requirement-to-component mapping,
-  code ownership rules, and common mistakes.
-- [Error guide](docs/error-guide.md) — error messages, causes, and fixes.
+- [Component reference](https://github.com/OpenLegged/botlab-python/blob/main/docs/component-reference.md)
+  — all public SDK symbols and their contracts.
+- [Decision table](https://github.com/OpenLegged/botlab-python/blob/main/docs/decision-table.md)
+  — requirement-to-component mapping, code ownership rules, and common
+  mistakes.
+- [Error guide](https://github.com/OpenLegged/botlab-python/blob/main/docs/error-guide.md)
+  — error messages, causes, and fixes.
+- The same three documents ship inside the wheel as `botlab/docs/`, so local AI
+  coding agents can read them straight after `pip install`; `botlab docs`
+  prints where they are.
 - The BotLab repository's `docs/api/` and `docs/examples/` directories contain
   the complete API semantics and tutorials.
 

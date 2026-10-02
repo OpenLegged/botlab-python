@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+    env:
+      # Fresh clones have no src/botlab/ui snapshot (gitignored, ~199 MB,
+      # regenerated with `botlab ui sync`); tests must pass without it. The
+      # wheel itself is only ever built on a checkout that has the snapshot —
+      # never in CI, which would silently ship a broken package.
+      BOTLAB_ALLOW_MISSING_UI: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up uv with Python ${{ matrix.python-version }}
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+
+      - name: Install package with dev extras
+        run: |
+          uv venv
+          uv pip install -e '.[dev]'
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Test
+        run: uv run pytest

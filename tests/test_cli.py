@@ -55,3 +55,11 @@ def test_run_no_server_writes_out(project_dir, tmp_path):
     target = tmp_path / "exported.zip"
     assert main(["run", str(project_dir), "--no-server", "--out", str(target)]) == 0
     assert target.is_file()
+
+
+def test_docs_prints_bundled_docs_location(capsys):
+    assert main(["docs"]) == 0
+    out = capsys.readouterr().out
+    assert "component-reference.md" in out
+    assert "decision-table.md" in out
+    assert "error-guide.md" in out

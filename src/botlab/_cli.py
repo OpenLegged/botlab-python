@@ -154,6 +154,30 @@ def _cmd_ui(args: argparse.Namespace) -> int:
     raise BotLabError(f"unknown ui subcommand {args.action!r}")
 
 
+def _cmd_docs(args: argparse.Namespace) -> int:
+    """Print where the bundled docs live, for humans and AI coding agents."""
+    package_dir = Path(__file__).resolve().parent
+    # Editable checkouts keep the docs at the repo root (src/botlab/../docs);
+    # wheels carry them inside the package (botlab/docs).
+    docs_dir = next(
+        (
+            candidate
+            for candidate in (package_dir / "docs", package_dir.parent.parent / "docs")
+            if candidate.is_dir()
+        ),
+        None,
+    )
+    if docs_dir is None:
+        raise BotLabError(
+            "this install does not bundle the docs (botlab/docs/ is missing); "
+            "read them at https://github.com/OpenLegged/botlab-python/tree/main/docs"
+        )
+    print(docs_dir)
+    for path in sorted(docs_dir.glob("*.md")):
+        print(f"  {path.name}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="botlab",
@@ -211,6 +235,12 @@ def build_parser() -> argparse.ArgumentParser:
     ui.add_argument("action", choices=["sync", "status"])
     ui.add_argument("--botlab", default="~/Project/BotLab", help="path to a BotLab checkout")
     ui.set_defaults(func=_cmd_ui)
+
+    docs = subparsers.add_parser(
+        "docs",
+        help="print where the bundled docs (component reference, decision table, error guide) live",
+    )
+    docs.set_defaults(func=_cmd_docs)
 
     return parser
 
