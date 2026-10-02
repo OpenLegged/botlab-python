@@ -9,7 +9,10 @@ import sys
 from pathlib import Path
 
 import pytest
-import tomllib
+
+# tomllib 是 3.11+ 的标准库；本模块只在一处用它读 pyproject。3.10 下整模块跳过
+# （CI 矩阵的 3.11–3.13 分支仍完整覆盖）。
+tomllib = pytest.importorskip("tomllib")
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
