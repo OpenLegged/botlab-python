@@ -148,7 +148,9 @@ def _add_local_source_root(roots: set[str], source: str, asset_base: str, label:
     if source.startswith("assets/") and asset_base:
         return
     directory = posixpath.dirname(source)
-    roots.add(source if directory == "." else directory)
+    # A root-level project asset lives under assetBase itself. Python's
+    # dirname('robot.xml') is '' (Node's is '.'), not an external site root.
+    roots.add(directory or asset_base or source)
 
 
 def collect_site_asset_roots(config: dict[str, Any]) -> set[str]:

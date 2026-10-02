@@ -138,6 +138,13 @@ def test_collect_site_asset_roots_rules():
         collect_site_asset_roots(unsafe)
 
 
+def test_root_level_resource_uses_the_project_asset_base():
+    config = _release_dict()
+    config["project"]["manifest"]["resources"][0]["source"] = "robot.xml"
+    config["project"]["assetPaths"] = ["robot.xml"]
+    assert collect_site_asset_roots(config) == {"project"}
+
+
 def test_read_release_config_requires_compiled_controller():
     config = read_release_config(_zip_bytes(_release_dict()))
     assert config["runtime"] == "python"
@@ -200,3 +207,23 @@ def test_build_site_directory_rejects_shared_site_assets(
         archive.writestr("project/main.py", "print('hi')\n")
     with pytest.raises(BotLabError, match="models/go2"):
         build_site_directory(project_dir, buffer.getvalue(), tmp_path / "site")
+
+
+def test_build_site_with_a_root_level_robot_asset(
+    project_dir: Path, mini_snapshot: Path, tmp_path: Path, monkeypatch
+):
+    from botlab import _site
+
+    monkeypatch.setattr(_site, "ui_snapshot_dir", lambda: mini_snapshot)
+    (project_dir / "assets/robot/scene.xml").rename(project_dir / "robot.xml")
+    controller = project_dir / "controller.py"
+    controller.write_text(
+        controller.read_text(encoding="utf-8").replace("assets/robot/scene.xml", "robot.xml"),
+        encoding="utf-8",
+    )
+    package = create_release_package(load_project(project_dir), metadata={"name": "Root Robot"})
+    out = tmp_path / "root-site"
+    build_site_directory(project_dir, package, out)
+    assert (out / "project/robot.xml").is_file()
+    config = read_release_config((out / "release.zip").read_bytes())
+    assert config["project"]["manifest"]["resources"][0]["source"] == "robot.xml"
