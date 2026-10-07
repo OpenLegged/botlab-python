@@ -33,10 +33,9 @@ Repository = "https://github.com/OpenLegged/botlab-python"
 
 [project.scripts]
 botlab = "botlab._cli:main"
-botlab-run = "botlab.sdk._runtime.run:main"
 
 [project.optional-dependencies]
-# Native headless simulation via `botlab-run`: native MuJoCo physics +
+# Native simulation via `botlab run`: native MuJoCo physics +
 # onnxruntime inference (CPU out of the box; GPU needs onnxruntime-gpu with
 # matching CUDA). Without these the CLI still compiles and packages projects.
 runtime = [
@@ -53,10 +52,9 @@ dev = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/botlab"]
-# The UI snapshot is a gitignored, pruned BotLab runtime snapshot (ui sync
-# excludes demo apps plus the built-in templates and shared model catalogs).
-# It is force-included by hatch_build.py when present, so fresh clones without
-# the snapshot can still install for development and CI; docs/ rides along as
+# The gitignored UI snapshot contains only the pure Three.js native display.
+# The editor/WASM runtime is a separate versioned archive cached on demand.
+# The hook validates the viewer before inclusion; docs/ rides along as
 # botlab/docs so local AI agents can read it after pip install.
 [tool.hatch.build.targets.wheel.hooks.custom]
 
@@ -70,6 +68,7 @@ include = [
   "README.md",
   "pyproject.toml",
 ]
+[tool.hatch.build.targets.sdist.hooks.custom]
 
 [tool.ruff]
 line-length = 100
@@ -85,6 +84,18 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 # The vendored SDK mirrors BotLab's browser source; keep its style verbatim.
 "src/botlab/sdk/**" = ["E", "F", "W", "I", "UP", "B"]
+# Native buffers intentionally zip to their shared width, matching the browser
+# execution contract. Existing positional zip behavior is retained on migration.
+"src/botlab/_runtime/_motion.py" = ["B905"]
+"src/botlab/_runtime/_physics.py" = ["B007", "B905"]
+"src/botlab/_runtime/_executor.py" = ["B007"]
+"src/botlab/_runtime/_processors/_math.py" = ["B905"]
+"src/botlab/_runtime/_processors/_model.py" = ["B905"]
+"src/botlab/_runtime/_processors/_output.py" = ["B905"]
+"src/botlab/_runtime/golden_check.py" = ["B905"]
+"src/botlab/_runtime/mujoco_scene.py" = ["B905"]
+# These tests exercise arbitrary display-thread failures and cleanup propagation.
+"tests/runtime/test_display.py" = ["B017"]
 
 [tool.pytest.ini_options]
 markers = ["e2e: browser end-to-end acceptance tests"]

@@ -113,6 +113,30 @@ class Simulation:
             spec["jointIndices"] = indices
         botlab_host.requestReset(str(reason), spec)
 
+    def on_substep(self, callback):
+        """Register a read-only observer called after every physics substep.
+
+        The callback receives ``Frame(dt, time, index)`` at physics rate and
+        may read live state through ``robot.read(...)``. It is an evaluation
+        channel, not a control channel: it cannot write state, and raising
+        inside it aborts the run with the error pointing at the hook.
+
+        Local botlab-python runtime only — the browser editor and published
+        packages have no per-substep Python path, so declaring a substep
+        observer there fails at declaration time instead of being silently
+        dropped.
+        """
+        if not callable(callback):
+            raise TypeError("on_substep callback must be callable")
+        register = getattr(botlab_host, "registerSubstepObserver", None)
+        if register is None:
+            raise RuntimeError(
+                "[botlab] on_substep is only supported by the local "
+                "botlab-python runtime (botlab run); the browser editor and "
+                "published packages do not run Python per physics substep"
+            )
+        register(callback)
+
     def run(self, controller):
         is_group = isinstance(controller, (list, tuple))
         controllers = list(controller) if is_group else [controller]
@@ -160,9 +184,17 @@ class Simulation:
             modifier_proxy = None
             modifier_is_proxy = False
             if controller.modify_action is not None:
+                def snapshot_action(action):
+                    # Engine buffers cross as typed views under Pyodide; reading the
+                    # shared memory and materializing the list in C beats iterating
+                    # the proxy element by element. The native host already sends
+                    # plain sequences.
+                    to_py = getattr(action, "to_py", None)
+                    return list(action if to_py is None else to_py())
+
                 async def modify_action(action, dt, time, index):
                     result = controller.modify_action(
-                        list(action),
+                        snapshot_action(action),
                         Frame(dt, time, index),
                     )
                     if inspect.isawaitable(result):

@@ -1,6 +1,6 @@
-"""Hatch build hook: force-include the gitignored UI snapshot when present.
+"""Hatch build hook: include only the checked pure display snapshot.
 
-``src/botlab/ui/`` (~199 MB, regenerated with ``botlab ui sync``) never enters
+``src/botlab/ui/`` (regenerated with ``botlab ui sync``) never enters
 git, so fresh clones lack it. A static force-include makes hatchling fail the
 whole build when the source is missing, which would block ``pip install -e .``
 for CI and contributors. Instead, include what is present, and refuse only
@@ -20,12 +20,39 @@ _DOCS = ("docs", "botlab/docs")
 _REQUIRED_DOCS = ("component-reference.md", "decision-table.md", "error-guide.md")
 
 
+def _validate_viewer(path: Path) -> None:
+    if not (path / "index.html").is_file() or not (path / "embed.html").is_file():
+        raise ValueError("index.html or embed.html is missing")
+    for source in path.rglob("*"):
+        if source.is_symlink():
+            raise ValueError(f"symlink in viewer: {source}")
+        if not source.is_file():
+            continue
+        import re
+
+        relative = source.relative_to(path).as_posix()
+        if ".wasm" in relative.lower() or re.search(
+            r"(?:^|/)(?:wasm|pyodide|netron|monaco|ort(?:-|\.|/)|onnxruntime)",
+            relative, re.I,
+        ):
+            raise ValueError(f"WASM or heavyweight runtime in viewer: {source}")
+        if source.suffix in {".html", ".js", ".mjs", ".css"}:
+            if re.search(r"(?:\.wasm\b|WebAssembly|ort-wasm|pyodide|@mujoco/mujoco)",
+                         source.read_text(encoding="utf-8"), re.I):
+                raise ValueError(f"browser simulation runtime reference in viewer: {source}")
+
+
 class BotlabBuildHook(BuildHookInterface):
     def initialize(self, version, build_data):
         root = Path(self.root)
         force_include = build_data.setdefault("force_include", {})
         if (root / _UI_SNAPSHOT[0]).is_dir():
-            force_include[_UI_SNAPSHOT[0]] = _UI_SNAPSHOT[1]
+            try:
+                _validate_viewer(root / _UI_SNAPSHOT[0])
+            except Exception as error:
+                raise SystemExit(f"Invalid native viewer snapshot: {error}") from error
+            destination = _UI_SNAPSHOT[0] if self.target_name == "sdist" else _UI_SNAPSHOT[1]
+            force_include[_UI_SNAPSHOT[0]] = destination
         elif not os.environ.get("BOTLAB_ALLOW_MISSING_UI"):
             raise SystemExit(
                 "src/botlab/ui is missing: this wheel would ship without the UI "
@@ -41,4 +68,4 @@ class BotlabBuildHook(BuildHookInterface):
                 + ". Restore docs/ before building; BOTLAB_ALLOW_MISSING_UI only "
                 "permits a contributor/CI wheel without the UI snapshot."
             )
-        force_include[_DOCS[0]] = _DOCS[1]
+        force_include[_DOCS[0]] = _DOCS[0] if self.target_name == "sdist" else _DOCS[1]

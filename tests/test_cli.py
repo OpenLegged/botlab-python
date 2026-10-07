@@ -57,6 +57,19 @@ def test_run_no_server_writes_out(project_dir, tmp_path):
     assert target.is_file()
 
 
+def test_run_headless_rejects_browser_execution():
+    with pytest.raises(SystemExit) as error:
+        main(["run", "--headless", "--browser"])
+    assert error.value.code == 2
+
+
+@pytest.mark.parametrize("option", [["--out", "release.zip"], ["--no-server"]])
+def test_run_headless_rejects_release_only_options(option, tmp_path, capsys):
+    assert main(["run", str(tmp_path), "--headless", *option]) == 2
+    assert "--headless cannot be combined" in capsys.readouterr().err
+    assert not (tmp_path / "release.zip").exists()
+
+
 def test_docs_prints_bundled_docs_location(capsys):
     assert main(["docs"]) == 0
     out = capsys.readouterr().out

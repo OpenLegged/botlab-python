@@ -17,7 +17,27 @@ def _host_list(value):
     converted = _host_value(value)
     if converted is None:
         return None
+    if isinstance(converted, memoryview):
+        # Host arrays arrive as zero-copy buffer views under Pyodide.
+        return list(converted)
     return [float(item) for item in converted]
+
+
+def _host_snapshot(value):
+    """Host observation with every array materialized as a plain list.
+
+    The browser bridge sends observation arrays as TypedArrays, which ``.to_py()``
+    maps to zero-copy buffer views instead of walking a plain JS Array element by
+    element; the native host already sends lists. Lists are the SDK contract
+    (``robot.observe()`` mirrors the native ``.tolist()`` layout), so buffers are
+    materialized here once in C rather than copied across the boundary.
+    """
+    converted = _host_value(value)
+    if isinstance(converted, dict):
+        return {key: _host_snapshot(item) for key, item in converted.items()}
+    if isinstance(converted, memoryview):
+        return list(converted)
+    return converted
 
 
 def _non_empty_string(value, label):

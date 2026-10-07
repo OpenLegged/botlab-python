@@ -262,15 +262,64 @@ def load_project(project_dir: Path) -> LoadedProject:
 
 
 def _required_node_types(plan: dict) -> list[str]:
-    if not isinstance(plan.get("nodes"), list):
-        return []
-    return sorted({
-        node["type"] for node in plan["nodes"] if isinstance(node, dict) and isinstance(node.get("type"), str)
-    })
+    entries = _plan_entries(plan)
+    types: set[str] = set()
+    for entry in entries:
+        for node in entry.get("nodes", []):
+            if isinstance(node, dict) and isinstance(node.get("type"), str):
+                types.add(node["type"])
+    return sorted(types)
+
+
+def _plan_entries(plan: dict) -> list[dict]:
+    """Expand the single/group controller envelope (policyControllerPlanEnvelope.ts).
+
+    A group is ``{"version": 1, "controllers": [...]}`` — no nested groups, no
+    other fields; anything else is a single plan.
+    """
+    if not isinstance(plan, dict) or "controllers" not in plan:
+        return [plan]
+    unknown = [field for field in plan if field not in ("version", "controllers")]
+    if unknown:
+        raise BotLabError(
+            f"[botlab] PolicyController group plan has unknown fields {unknown}"
+        )
+    if plan.get("version") != 1:
+        raise BotLabError("[botlab] PolicyController group plan.version must be 1")
+    controllers = plan["controllers"]
+    if not isinstance(controllers, list) or not controllers:
+        raise BotLabError(
+            "[botlab] PolicyController group plan.controllers must be a non-empty list"
+        )
+    for index, entry in enumerate(controllers):
+        if isinstance(entry, dict) and "controllers" in entry:
+            raise BotLabError(
+                f"[botlab] PolicyController group plan.controllers[{index}] "
+                "cannot be another group"
+            )
+    return controllers
 
 
 def validate_compiled_plan(plan: dict, manifest: dict) -> None:
     """Port of pythonReleaseControllerValidation.ts, plus the digest envelope."""
+    entries = _plan_entries(plan)
+    robot_ids: set[str] = set()
+    for entry in entries:
+        _validate_single_plan(entry, manifest)
+        robot_id = entry.get("robot")
+        if robot_id in robot_ids:
+            raise BotLabError(
+                f'compiled controller plan contains duplicate controller for robot "{robot_id}"'
+            )
+        robot_ids.add(robot_id)
+    declared = [item for item in manifest["resources"] if item["kind"] == "robot"]
+    if any(robot["id"] not in robot_ids for robot in declared):
+        raise BotLabError(
+            "compiled controller plan must provide exactly one controller for every declared robot"
+        )
+
+
+def _validate_single_plan(plan: dict, manifest: dict) -> None:
     robot = next(
         (item for item in manifest["resources"] if item["id"] == plan.get("robot")), None
     )

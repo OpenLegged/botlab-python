@@ -1,20 +1,19 @@
 #!/usr/bin/env python3
-"""Mirror the BotLab monorepo python package into this distribution.
+"""Mirror BotLab's browser Python SDK into this distribution.
 
 The ``botlab`` package BotLab serves in the browser
 (``src/domain/python/botlab/`` in the BotLab repository) is vendored verbatim
-as this distribution's ``sdk`` subpackage — its flat modules are the browser
-SDK, and its ``_runtime/`` subpackage is the native headless runtime
-(``botlab-run``). The generated built-in preset data module
+as this distribution's ``sdk`` subpackage. Only the flat browser SDK modules
+are mirrored; the native ``botlab._runtime`` is owned by this repository and
+must never be copied from BotLab. The generated built-in preset data module
 (``src/domain/python/botlab_presets.py``) is copied alongside as
 ``src/botlab/_presets.py``. Re-sync after BotLab-side changes:
 
     python scripts/sync_sdk.py --botlab ../BotLab
 
-The copy is byte-for-byte with no local edits: the top-level ``botlab_host``
-module the mirror imports is aliased to ``botlab._host`` at import time in
-``src/botlab/__init__.py``, and ``_runtime/`` lands under ``sdk/`` so its
-``from .._runtime_types import ...`` parent-relative imports resolve unchanged.
+The SDK copy is byte-for-byte with no local edits: the top-level
+``botlab_host`` module the mirror imports is aliased to ``botlab._host`` at
+import time in ``src/botlab/__init__.py``.
 """
 
 from __future__ import annotations
@@ -28,7 +27,6 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 PACKAGE_SUBDIR = Path("src/domain/python/botlab")
 PRESETS_SOURCE = PACKAGE_SUBDIR.parent / "botlab_presets.py"
 TARGET_DIR = REPO_ROOT / "src" / "botlab" / "sdk"
-RUNTIME_SUBDIR = "_runtime"
 PRESETS_TARGET = REPO_ROOT / "src" / "botlab" / "_presets.py"
 
 
@@ -67,7 +65,9 @@ def main() -> int:
     unexpected = [
         p
         for p in source.iterdir()
-        if p.name not in ("__pycache__", RUNTIME_SUBDIR)
+        # _runtime 是旧原生 runner 的滞留副本——归 botlab-python 所有，不镜像；
+        # 本仓移除它之前 sync 不应被它卡住（见 docs/local-python-runtime.md 迁移约定）。
+        if not (p.name in ("__pycache__", "_runtime") and p.is_dir())
         and ((p.is_file() and p.suffix != ".py") or p.is_dir())
     ]
     if unexpected:
@@ -78,37 +78,14 @@ def main() -> int:
             "side first"
         )
 
-    runtime_source = source / RUNTIME_SUBDIR
-    runtime_files = sorted(runtime_source.rglob("*.py")) if runtime_source.is_dir() else []
-    if runtime_source.exists():
-        if not (runtime_source / "__init__.py").is_file():
-            return fail(f"{runtime_source} is not a package (missing __init__.py)")
-        stray = [
-            path
-            for path in runtime_source.rglob("*")
-            if "__pycache__" not in path.relative_to(runtime_source).parts
-            and path.is_file()
-            and path.suffix != ".py"
-        ]
-        if stray:
-            names = ", ".join(str(path.relative_to(runtime_source)) for path in stray)
-            return fail(f"{runtime_source} contains non-module entries ({names})")
-
     if TARGET_DIR.exists():
         shutil.rmtree(TARGET_DIR)
     TARGET_DIR.mkdir(parents=True)
     for path in files:
         shutil.copy2(path, TARGET_DIR / path.name)
-    for path in runtime_files:
-        destination = TARGET_DIR / path.relative_to(source)
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(path, destination)
 
     shutil.copy2(presets_source, PRESETS_TARGET)
-    print(
-        f"synced {len(files)} SDK modules + {len(runtime_files)} runtime modules: "
-        f"{source} -> {TARGET_DIR}"
-    )
+    print(f"synced {len(files)} SDK modules: {source} -> {TARGET_DIR}")
     print(f"synced preset data: {presets_source} -> {PRESETS_TARGET}")
     return 0
 

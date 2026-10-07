@@ -13,7 +13,7 @@ jobs:
       matrix:
         python-version: ["3.10", "3.11", "3.12", "3.13"]
     env:
-      # Fresh clones have no src/botlab/ui snapshot (gitignored, ~199 MB,
+      # Fresh clones have no src/botlab/ui display frontend (gitignored,
       # regenerated with `botlab ui sync`); tests must pass without it. The
       # CI builds an explicitly incomplete source wheel for install-contract
       # tests only. A real candidate wheel must pass scripts/verify_wheel.py
@@ -36,8 +36,13 @@ jobs:
       - name: Lint
         run: uv run ruff check .
 
-      - name: Test
-        run: uv run pytest
+      - name: Test package and native runtime behavior
+        run: |
+          mkdir -p tmp
+          uv run pytest --basetemp=tmp/pytest
+
+      - name: Verify native processor parity with frozen browser traces
+        run: uv run python -m botlab._runtime.golden_check tests/fixtures/processors.json
 
       - name: Verify non-editable source wheel contract (no UI; not a release gate)
         run: |

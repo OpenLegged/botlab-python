@@ -8,9 +8,8 @@ dist/
 # Environments
 .venv/
 
-# The bundled browser runtime is a verbatim copy of a BotLab build closure
-# (115 MB of wasm/assets). It never belongs in git; regenerate it with
-# `botlab ui sync --botlab <BotLab checkout>` after building BotLab.
+# Generated Three.js display frontend; the full browser runtime lives in the
+# versioned external cache, never in the Python package or git.
 src/botlab/ui/
 
 # Tooling

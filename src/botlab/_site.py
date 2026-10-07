@@ -29,8 +29,8 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
+from ._browser_runtime import ensure_browser_runtime
 from ._host import BotLabError
-from ._server import ui_snapshot_dir
 
 MAX_RELEASE_ZIP_BYTES = 200 * 1024 * 1024
 MAX_RELEASE_UNCOMPRESSED_BYTES = 512 * 1024 * 1024
@@ -287,11 +287,11 @@ def _iter_project_files(project_dir: Path) -> list[str]:
 
 def build_site_directory(project_dir: Path, package: bytes, out_dir: Path) -> dict[str, Any]:
     """Write the standalone site for one already-built release package."""
-    snapshot_dir = ui_snapshot_dir()
+    snapshot_dir = ensure_browser_runtime()
     if not (snapshot_dir / "embed.html").is_file():
         raise BotLabError(
-            f"UI snapshot is missing an embed.html under {snapshot_dir}; "
-            "run `botlab ui sync --botlab <BotLab checkout>` and reinstall."
+            f"Browser runtime is missing embed.html under {snapshot_dir}; "
+            "run `botlab ui fetch --archive <archive.zip>`."
         )
     if out_dir.exists():
         raise BotLabError(f"Output directory already exists: {out_dir} (remove it or pass another).")

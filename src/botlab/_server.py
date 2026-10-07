@@ -1,9 +1,8 @@
-"""Local UI server: serve the full BotLab editor plus one project.
+"""Local UI server: serve one project with a chosen UI directory.
 
-The UI snapshot is a localized mirror of a BotLab site build: ``index.html``
-carries the ``window.BOTLAB_LOCAL_PROJECT`` flag, so the editor at ``/`` boots
-straight into the local project — file tree, Monaco, console/watch/metrics,
-the full IDE surface. It loads the project through ``local-project.json``
+The default package UI is the pure display viewer. Browser execution passes
+the separately cached editor runtime as ``ui_dir``; its localized
+``index.html`` loads the project through ``local-project.json``
 (current source files, read from disk on every request) and applies like any
 other workspace project. Project-relative assets in the manifest resolve
 through ``/project/``, which this server maps onto the directory on disk —
@@ -265,7 +264,7 @@ def start_project_server(
     ui_dir = ui_dir or ui_snapshot_dir()
     if not (ui_dir / "index.html").is_file():
         raise FileNotFoundError(
-            f"BotLab UI snapshot is missing index.html under {ui_dir}. "
+            f"BotLab UI is missing index.html under {ui_dir}. "
             "Run `botlab ui sync --botlab <BotLab checkout>` first."
         )
 

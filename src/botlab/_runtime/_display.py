@@ -1,16 +1,16 @@
 """Local display server: streams robot state over a loopback-only WebSocket.
 
-The browser embed viewer connects to the per-run token URL printed by
-``botlab-run``. Protocol: one JSON text frame with metadata,
-then one little-endian float32 binary frame per control step laid out as
-``[time, *qpos, *qvel]``. Browser origins and the token path are checked, and
-binding to anything but 127.0.0.1 is refused — this is a local monitoring
-surface, never a network service.
+The token URL printed by the native runner retains its legacy metadata text frame
+and little-endian float32 ``[time, *qpos, *qvel]`` control frames. An explicit
+``?scene=1`` suffix selects a cached MuJoCo scene description and world-state
+frames. Browser origins and exact token paths are checked, and binding to
+anything but 127.0.0.1 is refused.
 """
 
 import json
 import secrets
 import threading
+import time
 from urllib.parse import urlsplit
 
 import numpy as np
@@ -19,6 +19,9 @@ from websockets.sync.server import serve
 
 _LOOPBACK_HOST = "127.0.0.1"
 _MAX_TEXT_FRAME_BYTES = 64 * 1024
+_MAX_SCENE_BYTES = 128 * 1024 * 1024
+_MAX_SCENE_FRAME_BYTES = 32 * 1024 * 1024
+_SCENE_FRAME_INTERVAL_SECONDS = 1 / 60
 _MAX_METRICS = 1024
 _MAX_DIAGNOSTICS = 200
 _MAX_DIAGNOSTIC_KEYS = 32
@@ -48,7 +51,7 @@ def _allowed_browser_origin(origin):
 
 
 class DisplayServer:
-    def __init__(self, metadata, host=_LOOPBACK_HOST, port=None):
+    def __init__(self, metadata, host=_LOOPBACK_HOST, port=None, scene_provider=None):
         if host != _LOOPBACK_HOST:
             raise ValueError(
                 f"[display] host must be {_LOOPBACK_HOST} (loopback only), got \"{host}\""
@@ -57,6 +60,18 @@ class DisplayServer:
         self._host = host
         self._port = port
         self._clients = set()
+        self._scene_clients = set()
+        self._scene_provider = scene_provider
+        self._scene_payload = None
+        self._next_scene_frame_at = 0.0
+        if scene_provider is not None:
+            self._scene_payload = scene_provider.payload
+            if len(self._scene_payload.encode("utf-8")) > _MAX_SCENE_BYTES:
+                raise ValueError(f"[display] scene exceeds {_MAX_SCENE_BYTES} bytes")
+            if scene_provider.frame_size > _MAX_SCENE_FRAME_BYTES:
+                raise ValueError(
+                    f"[display] scene frame exceeds {_MAX_SCENE_FRAME_BYTES} bytes"
+                )
         self._lock = threading.Lock()
         self._server = None
         self._thread = None
@@ -91,15 +106,33 @@ class DisplayServer:
     def _handler(self, websocket):
         request = websocket.request
         origin = request.headers.get("Origin")
+        legacy_path = f"/display/{self._token}"
+        scene_path = f"{legacy_path}?scene=1"
         if (
-            request.path != f"/display/{self._token}"
+            request.path not in (legacy_path, scene_path)
             or not _allowed_browser_origin(origin)
+            or (request.path == scene_path and self._scene_payload is None)
         ):
             websocket.close(1008, "invalid local display client")
             return
-        websocket.send(self._text_payload({"type": "meta", **self._metadata}))
-        with self._lock:
-            self._clients.add(websocket)
+        scene = request.path == scene_path
+        clients = self._scene_clients if scene else self._clients
+        if scene:
+            try:
+                websocket.send(self._scene_payload)
+            except ConnectionClosed:
+                return
+            with self._lock:
+                clients.add(websocket)
+        else:
+            # Atomic with broadcasts: a client that received meta must already
+            # be registered before the stepping thread sends its next frame.
+            with self._lock:
+                try:
+                    websocket.send(self._text_payload({"type": "meta", **self._metadata}))
+                except ConnectionClosed:
+                    return
+                clients.add(websocket)
         try:
             try:
                 for _message in websocket:
@@ -112,7 +145,7 @@ class DisplayServer:
                 pass
         finally:
             with self._lock:
-                self._clients.discard(websocket)
+                clients.discard(websocket)
 
     @staticmethod
     def _text_payload(message):
@@ -184,12 +217,29 @@ class DisplayServer:
             except Exception:
                 with self._lock:
                     self._clients.discard(client)
+        with self._lock:
+            scene_clients = list(self._scene_clients)
+        now = time.monotonic()
+        if scene_clients and now >= self._next_scene_frame_at:
+            self._next_scene_frame_at = now + _SCENE_FRAME_INTERVAL_SECONDS
+            scene_frame = self._scene_provider.frame(time_seconds)
+            if len(scene_frame) > _MAX_SCENE_FRAME_BYTES:
+                raise ValueError(
+                    f"[display] scene frame exceeds {_MAX_SCENE_FRAME_BYTES} bytes"
+                )
+            for client in scene_clients:
+                try:
+                    client.send(scene_frame)
+                except Exception:
+                    with self._lock:
+                        self._scene_clients.discard(client)
 
     def stop(self):
         server = self._server
         with self._lock:
-            clients = list(self._clients)
+            clients = list(self._clients | self._scene_clients)
             self._clients.clear()
+            self._scene_clients.clear()
         for client in clients:
             try:
                 client.close()

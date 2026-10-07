@@ -165,7 +165,7 @@ def test_build_site_directory_layout(
 ):
     from botlab import _site
 
-    monkeypatch.setattr(_site, "ui_snapshot_dir", lambda: mini_snapshot)
+    monkeypatch.setattr(_site, "ensure_browser_runtime", lambda: mini_snapshot)
     package = create_release_package(
         load_project(project_dir), metadata={"name": "Test Duck"}
     )
@@ -191,7 +191,7 @@ def test_build_site_directory_rejects_shared_site_assets(
 ):
     from botlab import _site
 
-    monkeypatch.setattr(_site, "ui_snapshot_dir", lambda: mini_snapshot)
+    monkeypatch.setattr(_site, "ensure_browser_runtime", lambda: mini_snapshot)
     package = create_release_package(
         load_project(project_dir), metadata={"name": "Test Duck"}
     )
@@ -214,7 +214,7 @@ def test_build_site_with_a_root_level_robot_asset(
 ):
     from botlab import _site
 
-    monkeypatch.setattr(_site, "ui_snapshot_dir", lambda: mini_snapshot)
+    monkeypatch.setattr(_site, "ensure_browser_runtime", lambda: mini_snapshot)
     (project_dir / "assets/robot/scene.xml").rename(project_dir / "robot.xml")
     controller = project_dir / "controller.py"
     controller.write_text(

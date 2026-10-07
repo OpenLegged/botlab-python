@@ -16,8 +16,9 @@ botlab run
 executes it in a CPython subprocess (native `mujoco` + `onnxruntime` + NumPy),
 and opens the browser at `embed.html?ws=…` — a viewer over the loopback
 display stream. The browser renders; it never computes. `Ctrl+C` stops the
-run. The startup banner prints the viewer, editor, and stream URLs; use
-`--no-browser` to skip auto-opening.
+run. The startup banner prints the viewer and stream URLs; use
+`--no-browser` to skip auto-opening, or `--headless` to run without a viewer
+or HTTP server.
 
 `botlab run --browser` is the live editor debug loop instead: it serves the
 complete BotLab editor — not a stripped-down release page — with the project
@@ -103,8 +104,10 @@ resource preset fields.
 | `botlab run [DIR]` | Compile and run natively (local MuJoCo + ONNX Runtime), opening the browser as a read-only `?ws=` viewer. `--browser` switches to the editor debug loop where the browser executes the project. Neither writes a zip unless `--out` is provided. Supports `--verbose`, `--no-browser`, `--host`, and `--port`. |
 | `botlab build [DIR]` | Export `release.zip` to the project directory or a path selected with `--out`. The output uses the same format as BotLab's hosted `/d/<id>/` demos. `--site <dir>` additionally assembles a self-contained static site (see below). |
 | `botlab validate [DIR]` | Collect declarations, compile the plan, and build the release in memory without starting a server. |
-| `botlab-run [DIR]` | Native headless run without the viewer server: the same runner `botlab run` drives, started directly. Requires the `runtime` extra. |
-| `botlab ui sync --botlab <path>` | Synchronize the editor and embed runtime from a BotLab build, excluding built-in templates and shared robot models. |
+| `botlab run [DIR] --headless` | Native headless run without the viewer server. Supports custom Python controllers and requires the `runtime` extra. |
+| `botlab ui sync --botlab <path>` | Synchronize the lightweight display frontend from `dist-viewer/` and cache the full browser runtime from `dist/` for local development. |
+| `botlab ui fetch` | Fetch the version-matched browser runtime when needed; `--archive <file>` imports an offline archive and `--url <url>` selects an explicit download source. |
+| `botlab ui export --botlab <path> --out <file.zip>` | Export the separate version-matched browser runtime distribution from a BotLab build. |
 | `botlab ui status` | Show the status of the bundled UI snapshot. |
 | `botlab docs` | Print where the bundled docs (component reference, decision table, error guide) live in this install. |
 
@@ -130,18 +133,17 @@ The project must be self-contained — every resource under the project
 directory. A package that still needs a live-Python (`modify=…`) controller is
 rejected with a hint, matching what the embed runtime itself would do.
 
-## Native local runtime (`botlab run`, `botlab-run`)
+## Native local runtime (`botlab run`)
 
 `botlab run --browser` executes the simulation in the browser (MuJoCo WASM +
-ONNX Runtime Web). The default and `botlab-run` are the other way around:
-everything runs natively in a CPython process — native `mujoco` physics,
-`onnxruntime` inference, NumPy signal math. `botlab run` additionally serves
-the viewer page and opens it for you; `botlab-run` is the bare headless
-runner (CI, smoke tests, no UI snapshot needed).
+ONNX Runtime Web). By default, everything runs natively in a CPython process:
+native `mujoco` physics, `onnxruntime` inference, and NumPy signal math.
+`botlab run` serves the viewer page and opens it for you; `--headless` runs
+without the viewer or HTTP server (CI, smoke tests, no UI snapshot needed).
 
 ```bash
 pip install "botlab-python[runtime]"
-BOTLAB_STEPS=500 botlab-run my-robot-project
+BOTLAB_STEPS=500 botlab run my-robot-project --headless
 ```
 
 - `BOTLAB_STEPS=<n>` caps the run at `n` control steps and prints the
@@ -155,23 +157,22 @@ BOTLAB_STEPS=500 botlab-run my-robot-project
   `MUJOCO_GL=egl`. GPU inference needs `onnxruntime-gpu` matching your local
   CUDA/cuDNN; CPU works out of the box.
 - Without the `runtime` extra the CLI still compiles and packages projects;
-  `botlab run` (native default) and `botlab-run` fail up front listing the
+  `botlab run` (native default or `--headless`) fails up front listing the
   missing packages and the install command — `botlab run --browser` keeps
   working, since the browser brings its own runtimes.
-- `botlab run` compiles the project before starting the native runner, so it
+- With the viewer, `botlab run` compiles the project before starting the native runner, so it
   accepts the same controller set as `botlab build` (compiled
   `PolicyController` plans and `Signal.action(modify=...)` hooks). Projects
-  built around a custom `Controller.step()` class run via `botlab-run`, which
+  built around a custom `Controller.step()` class run via `botlab run --headless`, which
   installs the live session before `main.py` executes.
 
-`BOTLAB_DISPLAY=1` (optionally `BOTLAB_DISPLAY_PORT=<port>`) opens a
-loopback-only WebSocket that streams one metadata frame plus one
-little-endian float32 frame (`[time, *qpos, *qvel]`) per control step. The
-runner prints a token URL like `ws://127.0.0.1:<port>/display/<token>`; the
-browser embed viewer accepts it as the `?ws=` parameter — which is exactly
-what `botlab run` opens for you. The socket validates browser origins, limits
-frame sizes, and rejects every client write — it is a local monitoring
-surface, not a remote-control interface.
+`botlab run` opens a loopback-only WebSocket and prints a token URL like
+`ws://127.0.0.1:<port>/display/<token>`. The bundled viewer uses this URL as
+its `?ws=` parameter and requests the scene protocol: one scene snapshot
+followed by little-endian float32 body-pose frames. The socket validates
+browser origins, limits frame sizes, and rejects every client write. The
+legacy metadata plus `[time, *qpos, *qvel]` stream remains supported for
+existing clients.
 
 ## Documentation
 
@@ -195,18 +196,57 @@ proxy or reverse proxy must preserve these headers. Successful static asset
 requests are intentionally omitted from the access log; HTTP errors remain
 visible.
 
-## UI snapshot (`botlab/ui/`)
+## Display frontend and browser runtime
 
-The bundled browser runtime comes from BotLab's `dist/` build output and is
-synchronized from a BotLab checkout with `botlab ui sync`. The snapshot keeps
-the editor and embed runtime closure but excludes `/d` demo applications,
-`templates/` built-in projects, and `models/` shared robot models.
+The default wheel includes the Python SDK, native runner, bundled docs, and a
+small Three.js display frontend under `botlab/ui/`. It contains no MuJoCo,
+ONNX Runtime, or Pyodide WASM and no browser editor. Native `botlab run` serves
+this frontend and sends the compiled scene, textures, and body poses from the
+native MuJoCo process. The browser renders the scene and lets you orbit and
+zoom the camera; physics and inference remain in CPython. Native preview,
+`validate`, and plain `build` do not fetch a browser runtime.
 
-`botlab run` serves the current project's MJCF, ONNX, meshes, and other assets
-directly under `/project/`. Analytics scripts are removed from the localized
-`index.html`. The generated snapshot is ignored by Git and included in the
-wheel with Hatch's `force-include` setting; `botlab ui status` reports whether
-it is present in the active install.
+`run --browser`, a served `run --out` preview, and `build --site` use a separate
+full browser runtime archive. On first use the CLI fetches the archive pinned
+to the installed package version from the matching GitHub release, verifies
+its manifest and file hashes, and installs it in the user cache. Later uses
+work offline. Download, version, or integrity errors stop the command and name
+the failing archive; execution does not silently switch to another runtime.
+The generated static site includes the needed WASM so visitors need no Python
+installation and make no runtime download through the CLI.
+
+For offline machines, import the exact matching archive first:
+
+```bash
+botlab ui fetch --archive botlab-browser-runtime-0.3.0.zip
+```
+
+`botlab ui fetch --url <url>` allows a mirror. The default cache is
+`${XDG_CACHE_HOME:-~/.cache}/botlab/browser/<version>`;
+`BOTLAB_RUNTIME_CACHE_DIR` overrides the browser cache root. The optional
+runtime stays outside the installed Python package. `botlab ui status` shows
+the bundled display and cached browser runtime separately.
+
+To generate both distributions from the source checkouts:
+
+```bash
+# In BotLab, with the Node version from .nvmrc:
+npm ci
+npm run build
+npm run build:viewer
+# In botlab-python:
+botlab ui sync --botlab ../BotLab
+botlab ui export --botlab ../BotLab --out tmp/botlab-browser-runtime-0.3.0.zip
+uv build --wheel --out-dir tmp/core-wheel
+```
+
+The generated display frontend is ignored by Git and bundled in the core
+wheel. The exported runtime archive is a separate release asset named
+`botlab-browser-runtime-<version>.zip`; attach it to the matching
+`v<version>` GitHub release alongside publishing the Python wheel. Until that
+asset is published, use `ui sync`, `ui fetch --archive`, or an explicit mirror.
+Runtime archives exclude built-in demo apps, templates, and shared models;
+project assets continue to be served from `/project/`.
 
 ## Runtime model
 
@@ -229,7 +269,7 @@ Current constraints:
 - Legacy projects with a non-empty `botlab.yaml` are not supported by the CLI;
   Python declarations are the only CLI entry point.
 - Project assets must use project-relative paths and must exist in the project
-  directory. (`botlab-run` additionally resolves the shared assets root, but
+  directory. (`botlab run --headless` additionally resolves the shared assets root, but
   `botlab build`/`validate` still require self-contained projects.)
 
 ## Development
@@ -241,47 +281,59 @@ pytest
 ```
 
 `[dev]` includes the `runtime` extras (mujoco, onnxruntime, numpy, websockets)
-so the native `botlab-run` tests run; a bare
+so the native runtime tests run; a bare
 `uv pip install -e .` skips them and those tests skip too.
 
-Editable installs do not include the UI snapshot: `src/botlab/ui/` is
-Git-ignored build output, so `botlab run` and `botlab build` fail with
-"UI snapshot is missing index.html" until the snapshot is generated — build
-the frontend in a BotLab checkout (`npm install && npm run build`), then run
-`botlab ui sync --botlab <BotLab checkout>`. A plain
-`pip install botlab-python` from PyPI ships the snapshot in the wheel and
-needs no extra step.
+Editable installs start without the generated display frontend. Build the
+viewer with `npm run build:viewer` in BotLab, build the full frontend with
+`npm run build`, then run `botlab ui sync --botlab <BotLab checkout>`.
+Release wheels already include the display frontend. Only commands that
+execute or export a browser simulation acquire the separate runtime.
 
-`src/botlab/sdk/` is a verbatim mirror of the `botlab` package in the BotLab
-repository (`src/domain/python/botlab/`): its flat modules are the browser
-SDK and its `_runtime/` subpackage is the native runner behind `botlab-run`.
-The generated built-in preset registry (`botlab_presets.py` upstream) is
-mirrored as `src/botlab/_presets.py`. Re-sync everything after BotLab-side
-changes with `python scripts/sync_sdk.py --botlab <BotLab checkout>`.
-`_host.py` is the CPython counterpart of the browser's JavaScript bridge; the
-native runtime installs its session into it via `set_runtime_session` before
-a project's `main.py` runs.
+`src/botlab/sdk/` mirrors only the flat Python SDK modules from BotLab's
+`src/domain/python/botlab/`. The generated built-in preset registry
+(`botlab_presets.py` upstream) is mirrored as `src/botlab/_presets.py`.
+Re-sync those files after BotLab-side SDK changes with
+`python scripts/sync_sdk.py --botlab <BotLab checkout>`; the script rejects
+unexpected upstream subdirectories. The native runner and its tests are
+maintained in this repository under `src/botlab/_runtime/` and `tests/`;
+SDK synchronization never replaces them. `_host.py` is the CPython
+counterpart of the browser's JavaScript bridge; the native runtime installs
+its session into it via `set_runtime_session` before a project's `main.py`
+runs. BotLab builds the pure Three.js display frontend; `botlab ui sync`
+packages that build for native runs.
+
+When changing the ownership boundary, land the native runtime migration in
+botlab-python first. Then remove BotLab's old native sources and switch its CI
+to the cross-repository golden contract check. This order keeps installed
+Python builds supplied with a runner throughout the transition.
 
 ## Candidate wheel acceptance
 
 Before uploading a release, verify the **exact wheel to be uploaded**, including
-its real synchronized UI snapshot. From this checkout, with `uv` on PATH:
+its real synchronized display frontend. Verify the separate browser runtime
+archive used for website assembly too. From this checkout, with `uv` on PATH:
 
 ```bash
 python scripts/verify_wheel.py dist/pypi-0.3.0/botlab_python-0.3.0-py3-none-any.whl \
+  --browser-runtime tmp/botlab-browser-runtime-0.3.0.zip \
   --out tmp/wheel-acceptance-0.3.0
 ```
 
 Use a new output directory for each run. The command installs that wheel with
-`[runtime]` into a fresh isolated venv, checks the installed docs, UI and both
-CLI entrypoints, then runs `docs`, `ui status`, `validate`, a bounded real native
-MuJoCo simulation, `build`, native `run --no-browser --port 0`, and `build --site`.
+`[runtime]` into a fresh isolated venv, checks the installed docs, WASM-free
+display frontend and single `botlab` CLI entrypoint, then runs `docs`, `ui status`,
+`validate`, a bounded real native `run --headless` simulation, `build`, native
+`run --no-browser --port 0`, and `build --site`.
 It uses a generated self-contained `main.py` / `controller.py` project with local
 MJCF; no BotLab checkout, existing venv, fixed machine path, or fixed port is
 required. It does not rebuild, modify, or upload the input wheel.
 
-`report.json` records the input SHA-256, each command's exit code and the site
-directory; command output is saved as separate logs. Browser acceptance is a
+`report.json` records the input wheel and runtime archive SHA-256, each
+command's exit code and the site
+directory; command output is saved as separate logs. The native path must leave
+the isolated browser cache absent; the site path imports the optional runtime.
+Omit `--browser-runtime` to test the published version-pinned download instead. Browser acceptance is a
 separate required step: serve `site/` using an ordinary static server, open it
 at a nested URL without isolation headers, and verify the robot runs and can
 be dragged. The script deliberately records `browser_verified: false`.
@@ -290,8 +342,8 @@ CI additionally runs this command with `--source-wheel` against a non-editable
 wheel built from the public checkout. This checks docs, CLI, compilation and
 native MuJoCo without UI or site assembly; **it is not the candidate release
 gate**. `BOTLAB_ALLOW_MISSING_UI=1` remains the explicit contributor/CI build
-override; it never permits missing bundled docs. The sdist includes docs for
-source installs but has no bundled UI snapshot. Release uploads remain wheel
+override; it never permits missing bundled docs. The sdist includes docs and
+the synchronized display frontend for source installs. Release uploads remain wheel
 only; this verification command does not upload an sdist or any other artifact.
 
 ## License

@@ -1,6 +1,6 @@
 """Replay processor-level golden traces exported by the TS engine.
 
-Consumes ``src/domain/python/golden/processors.json`` (written by
+Consumes ``tests/fixtures/processors.json`` (exported by BotLab
 ``processorGoldenExport.test.ts`` with UPDATE_GOLDEN=1): for every case it
 builds the ported processor, replays the recorded step inputs and compares
 outputs. The frame contract mirrors the exporter exactly — dt=0.02,
@@ -28,7 +28,7 @@ def default_golden_path():
     import os
 
     runtime_dir = os.path.dirname(os.path.abspath(__file__))
-    return os.path.join(runtime_dir, "..", "..", "golden", "processors.json")
+    return os.path.join(runtime_dir, "..", "..", "..", "tests", "fixtures", "processors.json")
 
 
 def _inject_motion_assets(case, config):
@@ -48,7 +48,7 @@ def _inject_motion_assets(case, config):
 
 def replay(golden_path, atol=1e-9):
     """Replay every case; returns (failures, total) with per-case details."""
-    with open(golden_path, "r", encoding="utf-8") as handle:
+    with open(golden_path, encoding="utf-8") as handle:
         golden = json.load(handle)
     if golden.get("version") != 1:
         raise ValueError(f"unsupported golden version {golden.get('version')!r}")

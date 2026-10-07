@@ -1,7 +1,7 @@
 """The native ``botlab run`` flow: local execution plus a browser viewer.
 
 The simulation runs in a CPython subprocess — native MuJoCo physics and
-ONNX Runtime inference through the vendored ``sdk/_runtime`` runner. This
+ONNX Runtime inference through the package-owned ``_runtime`` runner. This
 process compiles the project, serves the UI snapshot so the browser can open
 the read-only ``?ws=`` viewer, and forwards the runner's output.
 """
@@ -20,7 +20,7 @@ from urllib.parse import quote
 
 from ._debug import DebugReleaseProvider, _project_signature, build_debug_release
 from ._host import BotLabError
-from ._server import start_project_server
+from ._server import start_project_server, ui_snapshot_dir
 
 _DISPLAY_READY_MARKER = "display ready: "
 _DISPLAY_STARTUP_TIMEOUT_SECONDS = 30.0
@@ -28,7 +28,7 @@ _DISPLAY_STARTUP_TIMEOUT_SECONDS = 30.0
 
 def require_native_runtime() -> None:
     """Fail up front when the runtime extras are missing — no silent fallback."""
-    from .sdk._runtime import _deps
+    from ._runtime import _deps
 
     probe = _deps.probe_runtime_deps()
     if probe.missing:
@@ -53,28 +53,33 @@ def run_native(
     host: str,
     port: int,
     open_browser: bool,
+    report_path: str | None = None,
 ) -> int:
     """Serve the viewer surface and drive the native runner until it exits."""
     package = build_debug_release(project)
     provider = DebugReleaseProvider(project_dir, package, _project_signature(project_dir))
     httpd, base_url = start_project_server(
-        project_dir, None, host, port, release_provider=provider
+        project_dir, None, host, port, release_provider=provider, ui_dir=ui_snapshot_dir()
     )
     server_thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     server_thread.start()
     try:
-        return _drive_runner(project, project_dir, base_url, open_browser=open_browser)
+        return _drive_runner(project, project_dir, base_url, open_browser=open_browser,
+                             report_path=report_path)
     finally:
         httpd.shutdown()
         httpd.server_close()
         server_thread.join(timeout=5.0)
 
 
-def _drive_runner(project, project_dir: Path, base_url: str, *, open_browser: bool) -> int:
+def _drive_runner(project, project_dir: Path, base_url: str, *, open_browser: bool,
+                  report_path: str | None = None) -> int:
     display_port = _free_loopback_port()
     env = {**os.environ, "BOTLAB_DISPLAY": "1", "BOTLAB_DISPLAY_PORT": str(display_port)}
+    if report_path is not None:
+        env["BOTLAB_REPORT"] = report_path
     runner = subprocess.Popen(
-        [sys.executable, "-m", "botlab.sdk._runtime.run", str(project_dir)],
+        [sys.executable, "-m", "botlab._runtime.run", str(project_dir)],
         env=env,
         stderr=subprocess.PIPE,
         text=True,
@@ -119,7 +124,6 @@ def _drive_runner(project, project_dir: Path, base_url: str, *, open_browser: bo
             flush=True,
         )
         print(f"  ➜  Viewer: {viewer_url}", flush=True)
-        print(f"  ➜  Editor: {base_url}/", flush=True)
         print(f"  ➜  Stream: {display_url}", flush=True)
         if open_browser:
             webbrowser.open(viewer_url)
