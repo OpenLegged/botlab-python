@@ -1,4 +1,4 @@
-"""Local project runner: `python -m botlab.run <project-dir>`.
+"""Internal native runner behind ``botlab run`` and ``botlab run --headless``.
 
 Wires the third host state before the project's own ``main.py`` executes:
 compile declarations, build native MuJoCo physics from the primary robot
@@ -21,15 +21,37 @@ def _require_runtime():
     require_runtime_deps(probe.available, probe.missing)
 
 
-def _project_directory(argv):
-    if len(argv) != 2:
-        print("usage: python -m botlab.run <project directory>", file=sys.stderr)
+def _parse_args(argv):
+    if len(argv) < 2:
+        print("usage: botlab run <project directory> [--headless] [--report PATH]",
+              file=sys.stderr)
         raise SystemExit(2)
-    directory = os.path.abspath(argv[1])
+    positional = []
+    report = None
+    index = 1
+    while index < len(argv):
+        arg = argv[index]
+        if arg == "--report":
+            if index + 1 >= len(argv):
+                print("[botlab.run] --report needs a path", file=sys.stderr)
+                raise SystemExit(2)
+            report = argv[index + 1]
+            index += 2
+            continue
+        if arg == "--headless":
+            index += 1
+            continue
+        positional.append(arg)
+        index += 1
+    if len(positional) != 1:
+        print("usage: botlab run <project directory> [--headless] [--report PATH]",
+              file=sys.stderr)
+        raise SystemExit(2)
+    directory = os.path.abspath(positional[0])
     if not os.path.isdir(directory):
         print(f"[botlab.run] project directory not found: {directory}", file=sys.stderr)
         raise SystemExit(2)
-    return directory
+    return directory, report
 
 
 def _declare_project(directory):
@@ -72,28 +94,32 @@ def _resolve_source(directory, source):
     )
 
 
-def _primary_robot(state):
+def _robots(state):
     resources = [item for item in state.manifest()["resources"] if item["kind"] == "robot"]
     if not resources:
         raise RuntimeError(
             "[botlab.run] the project declares no robot resource; nothing to simulate"
         )
-    if len(resources) > 1:
-        raise RuntimeError(
-            "[botlab.run] multi-robot projects are not supported by the local "
-            "runtime yet"
-        )
-    robot = resources[0]
-    source = _resolve_source(state.directory or os.getcwd(), robot["source"])
-    return state, robot, source
+    return resources
 
 
-def _load_model_with_transform(source, transform, mujoco_module):
+def _robot_format(path):
+    lower = str(path).lower()
+    if lower.endswith(".mjb"):
+        return "mjb"
+    if lower.endswith(".urdf"):
+        return "urdf"
+    return "xml"
+
+
+def _load_model_with_transform(source, transform, mujoco_module, entry_transform=None):
     """Compile the entry XML with ``transform`` applied to every XML in its
     include chain — the browser does the same per VFS file (transforms.all).
 
     XMLs land in a temp directory with the include layout preserved; every
     other file of the model tree is symlinked so meshes still resolve.
+    ``entry_transform`` runs after ``transform`` on the entry file only — the
+    composed-scene injection point (the browser composes on the entry too).
     """
     import os
     import re
@@ -101,6 +127,7 @@ def _load_model_with_transform(source, transform, mujoco_module):
     import tempfile
 
     model_dir = os.path.dirname(os.path.abspath(source))
+    entry_name = os.path.basename(source)
     tmp_dir = tempfile.mkdtemp(prefix="botlab-model-")
     try:
         written = set()
@@ -109,9 +136,11 @@ def _load_model_with_transform(source, transform, mujoco_module):
             if rel_name in written:
                 return
             written.add(rel_name)
-            with open(xml_path, "r", encoding="utf-8") as handle:
+            with open(xml_path, encoding="utf-8") as handle:
                 text = handle.read()
             text = transform(text)
+            if entry_transform is not None and rel_name == entry_name:
+                text = entry_transform(text)
             target = os.path.join(tmp_dir, rel_name)
             os.makedirs(os.path.dirname(target) or tmp_dir, exist_ok=True)
             with open(target, "w", encoding="utf-8") as handle:
@@ -122,7 +151,7 @@ def _load_model_with_transform(source, transform, mujoco_module):
                 if os.path.isfile(include_abs):
                     process(include_abs, include_rel)
 
-        process(os.path.abspath(source), os.path.basename(source))
+        process(os.path.abspath(source), entry_name)
 
         for root, _dirs, files in os.walk(model_dir):
             for name in files:
@@ -142,27 +171,92 @@ def _load_model_with_transform(source, transform, mujoco_module):
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
-def _build_physics(source, robot_config, resources=None, path_resolver=None):
+def _build_physics(state, directory, path_resolver):
     import mujoco
 
+    from ._compose import compose_entry_xml, load_extra_robot
     from ._physics import MujocoPhysics, inject_auto_actuators
 
-    auto_actuators = robot_config.get("autoActuators")
+    robots = _robots(state)
+    primary = robots[0]
+    primary_config = primary.get("config") or {}
+    source = _resolve_source(directory, primary["source"])
+
+    extras = []
+    if len(robots) > 1:
+        if _robot_format(source) != "xml":
+            raise RuntimeError(
+                f'[botlab.run] robot "{primary["id"]}" is not MJCF; '
+                "composed projects require MJCF for every robot"
+            )
+        for index, robot in enumerate(robots[1:], start=1):
+            extra_source = _resolve_source(directory, robot["source"])
+            if _robot_format(extra_source) != "xml":
+                raise RuntimeError(
+                    f'[botlab.run] extra robot "{robot["id"]}" uses '
+                    f'{_robot_format(extra_source).upper()}; composed robots require MJCF'
+                )
+            extras.append(
+                load_extra_robot(
+                    extra_source,
+                    f"r{index}_",
+                    (robot.get("config") or {}).get("autoActuators"),
+                    label=robot["id"],
+                )
+            )
+
+    auto_actuators = primary_config.get("autoActuators")
+
+    def entry_transform(xml):
+        return compose_entry_xml(xml, extras)
+
     model = _load_model_with_transform(
         source,
         lambda xml: inject_auto_actuators(xml, auto_actuators, label=source),
         mujoco,
+        entry_transform=entry_transform if extras else None,
     )
+    # 物理步长以 project(physics_hz=…) 为准（浏览器 worker 同此契约）；XML 里
+    # 显式声明了不同 timestep 是配置冲突，明确报错而不是跑错速度。
+    physics_hz = state.manifest()["physics_hz"]
+    target_timestep = 1.0 / physics_hz
+    current_timestep = float(model.opt.timestep)
+    if abs(current_timestep - target_timestep) > 1e-12:
+        if abs(current_timestep - 0.002) > 1e-12:
+            raise RuntimeError(
+                f"[botlab.run] the model declares timestep={current_timestep} but "
+                f"project physics_hz={physics_hz} implies {target_timestep}; "
+                "align the MJCF <option> or the project declaration"
+            )
+        model.opt.timestep = target_timestep
     data = mujoco.MjData(model)
     mujoco.mj_forward(model, data)
+    manifest_resources = state.manifest()["resources"]
+    if not extras:
+        return MujocoPhysics(
+            model,
+            data,
+            mujoco,
+            resources=manifest_resources,
+            path_resolver=path_resolver,
+            initial_qpos=primary_config.get("initialQpos"),
+            initial_qvel=primary_config.get("initialQvel"),
+        )
+    robot_states = [
+        {
+            **(robot.get("config") or {}),
+            "robotId": robot["id"],
+            "namespace": "" if index == 0 else f"r{index}_",
+        }
+        for index, robot in enumerate(robots)
+    ]
     return MujocoPhysics(
         model,
         data,
         mujoco,
-        resources=resources,
+        resources=manifest_resources,
         path_resolver=path_resolver,
-        initial_qpos=robot_config.get("initialQpos"),
-        initial_qvel=robot_config.get("initialQvel"),
+        robot_states=robot_states,
     )
 
 
@@ -185,7 +279,9 @@ def _display_port(environ):
 
 def main(argv=None):
     args = list(sys.argv if argv is None else argv)
-    directory = _project_directory(args)
+    directory, report_path = _parse_args(args)
+    if report_path is None:
+        report_path = os.environ.get("BOTLAB_REPORT") or None
     _require_runtime()
     original_directory = os.getcwd()
     original_path = list(sys.path)
@@ -193,20 +289,17 @@ def main(argv=None):
     session = None
     botlab_host = None
     primary_error = None
+    recorder = None
     try:
         state = _declare_project(directory)
-        _project, robot, source = _primary_robot(state)
         manifest = state.manifest()
-        resolve = lambda resource_source: _resolve_source(directory, resource_source)
-        physics = _build_physics(
-            source,
-            robot["config"],
-            resources=manifest["resources"],
-            path_resolver=resolve,
-        )
+        def resolve(resource_source):
+            return _resolve_source(directory, resource_source)
+        physics = _build_physics(state, directory, resolve)
 
         if os.environ.get("BOTLAB_DISPLAY", "").strip() not in ("", "0"):
             from ._display import DisplayServer
+            from .mujoco_scene import MujocoSceneProvider
 
             display = DisplayServer(
                 metadata={
@@ -217,6 +310,9 @@ def main(argv=None):
                     "qvelDim": int(physics.data.qvel.shape[0]),
                 },
                 port=_display_port(os.environ),
+                scene_provider=MujocoSceneProvider(
+                    physics.model, physics.data, physics._mujoco, manifest["name"]
+                ),
             )
             display.start()
             print(
@@ -238,16 +334,39 @@ def main(argv=None):
             path_resolver=resolve,
         )
         botlab_host.set_runtime_session(session)
+        if report_path is not None:
+            from ._report import RunRecorder
+
+            recorder = RunRecorder(
+                report_path,
+                manifest["name"],
+                manifest["control_hz"],
+                manifest["physics_hz"],
+                physics._robot_ids,
+            )
+            session.set_recorder(recorder)
 
         runpy.run_path(os.path.join(directory, "main.py"), run_name="__main__")
 
         steps_env = os.environ.get("BOTLAB_STEPS", "").strip()
         max_steps = int(steps_env) if steps_env else None
         completed = session.run(max_steps)
+        if recorder is not None:
+            print(f"[botlab.run] run report: {recorder.write()}", file=sys.stderr)
         print(f"[botlab.run] completed {completed} control steps", file=sys.stderr)
         return 0
     except BaseException as error:
         primary_error = error
+        if recorder is not None:
+            # 中断/失败也落盘：已完成的部分正是排障要看的。
+            try:
+                recorder.write()
+            except Exception as report_error:
+                cleanup_note = f"[botlab.run] writing the run report failed: {report_error}"
+                if hasattr(error, "add_note"):
+                    error.add_note(cleanup_note)
+                else:
+                    print(cleanup_note, file=sys.stderr)
         raise
     finally:
         cleanup_errors = []

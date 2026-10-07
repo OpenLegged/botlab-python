@@ -1,4 +1,4 @@
-"""The `botlab-run` native entry: wiring, dependency errors, and a real run."""
+"""The native runner and `botlab run`: wiring, errors, and real runs."""
 
 from __future__ import annotations
 
@@ -83,7 +83,7 @@ def _run_native(project: Path, *extra_env: str) -> subprocess.CompletedProcess:
         key, _, value = item.partition("=")
         env[key] = value
     return subprocess.run(
-        [sys.executable, "-m", "botlab.sdk._runtime.run", str(project)],
+        [sys.executable, "-m", "botlab._runtime.run", str(project)],
         capture_output=True,
         text=True,
         env=env,
@@ -91,9 +91,9 @@ def _run_native(project: Path, *extra_env: str) -> subprocess.CompletedProcess:
     )
 
 
-def test_pyproject_wires_the_native_entry_point():
+def test_pyproject_exposes_only_the_botlab_entry_point():
     data = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    assert data["project"]["scripts"]["botlab-run"] == "botlab.sdk._runtime.run:main"
+    assert data["project"]["scripts"] == {"botlab": "botlab._cli:main"}
     extras = data["project"]["optional-dependencies"]["runtime"]
     assert {"numpy", "mujoco", "onnxruntime", "websockets"} <= {
         requirement.split(">=")[0].split("[")[0] for requirement in extras
@@ -102,7 +102,7 @@ def test_pyproject_wires_the_native_entry_point():
 
 def test_usage_error_without_arguments():
     result = subprocess.run(
-        [sys.executable, "-m", "botlab.sdk._runtime.run"],
+        [sys.executable, "-m", "botlab._runtime.run"],
         capture_output=True,
         text=True,
         timeout=60,
@@ -141,6 +141,27 @@ def test_native_run_completes_control_steps(tmp_path: Path):
     importlib.util.find_spec("mujoco") is None,
     reason="runtime extras not installed",
 )
+def test_cli_headless_runs_custom_controller_without_viewer(tmp_path: Path):
+    result = subprocess.run(
+        [sys.executable, "-m", "botlab._cli", "run", str(_pendulum_project(tmp_path)),
+         "--headless"],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        env={**os.environ, "BOTLAB_STEPS": "3", "BOTLAB_DISPLAY": "0",
+             "BOTLAB_RUNTIME_CACHE_DIR": str(tmp_path / "browser-cache")},
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "completed 3 control steps" in result.stderr
+    assert "display ready" not in result.stderr
+    assert "Viewer:" not in result.stdout
+    assert not (tmp_path / "browser-cache").exists()
+
+
+@pytest.mark.skipif(
+    importlib.util.find_spec("mujoco") is None,
+    reason="runtime extras not installed",
+)
 def test_native_run_rejects_nonexistent_robot_source(tmp_path: Path):
     project = _pendulum_project(tmp_path)
     (project / "robot.xml").unlink()
@@ -164,7 +185,7 @@ def test_run_browser_flag_parses(project_dir):
 
 def test_require_native_runtime_suggests_browser_fallback(monkeypatch):
     from botlab import _native
-    from botlab.sdk._runtime import _deps
+    from botlab._runtime import _deps
 
     class FakeProbe:
         available = ("numpy",)

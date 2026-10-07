@@ -5,8 +5,8 @@ bridge. This module is its CPython counterpart: it collects the declarations
 a project's ``controller.py`` makes at import time, answers the few queries
 the SDK needs while building signal expressions (``actionDimension``,
 ``parameterRange``), and captures the compiled controller plan that
-``Simulation.run()`` registers. The native runtime (``botlab-run``, the
-vendored ``sdk/_runtime/`` package) installs its session via
+``Simulation.run()`` registers. The native runtime (``botlab run``, the
+locally maintained ``botlab._runtime`` package) installs its session via
 ``set_runtime_session`` before a project's ``main.py`` runs; runtime calls
 then delegate to that session instead of raising.
 
@@ -450,10 +450,10 @@ def end_project_declaration() -> None:
 
 
 class _ProjectStateView:
-    """The flat project state the native runtime drives (``botlab-run``):
+    """The flat project state the native runtime drives (``botlab run``):
     ``reset(directory)`` opens a fresh declaration session, importing
     ``controller.py`` fills it, and ``manifest()``/``resource()`` read the
-    collected declarations in the shape ``sdk/_runtime/run.py`` consumes.
+    collected declarations in the shape ``botlab._runtime.run`` consumes.
     """
 
     def __init__(self):
@@ -501,7 +501,7 @@ def project_state() -> _ProjectStateView:
     return _project_state
 
 
-# The native runtime (`botlab-run`) installs its session before the project's
+# The native runtime (`botlab run`) installs its session before the project's
 # main.py runs; None keeps every runtime call on its offline error.
 _runtime_session = None
 
@@ -593,6 +593,16 @@ def registerStep(proxy, robot_ids=None):  # noqa: N802
     if _runtime_session is not None:
         return _runtime_session.registerStep(proxy, robot_ids)
     raise BotLabError("Custom Controllers require the live Python runtime; declare a PolicyController instead.")
+
+
+def registerSubstepObserver(callback):  # noqa: N802
+    if _runtime_session is not None:
+        return _runtime_session.registerSubstepObserver(callback)
+    raise BotLabError(
+        "on_substep is only supported by the local botlab-python runtime "
+        "(botlab run); the browser editor and published packages do not run "
+        "Python per physics substep"
+    )
 
 
 # Runtime calls the SDK makes from a running simulation. With a session

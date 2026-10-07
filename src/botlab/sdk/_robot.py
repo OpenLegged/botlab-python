@@ -5,6 +5,7 @@ from ._declaration import (
     _ResourceValues,
     _declare_resource,
     _host_list,
+    _host_snapshot,
     _host_value,
     _non_empty_string,
     _policy_pd_vector,
@@ -86,7 +87,7 @@ class Robot:
     # -- raw state, for controllers that run their own Python step ----------
 
     def observe(self):
-        return _host_value(botlab_host.observe(self.id))
+        return _host_snapshot(botlab_host.observe(self.id))
 
     def action_dimension(self):
         return int(botlab_host.actionDimension(self.id))

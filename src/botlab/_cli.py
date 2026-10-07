@@ -3,6 +3,7 @@
 - ``botlab run [PROJECT_DIR]`` — run the project natively: compile it, execute
   it with local MuJoCo and ONNX Runtime, and open the browser as a read-only
   ``?ws=`` viewer of the running simulation (needs the ``runtime`` extra).
+  ``--headless`` runs without a viewer or HTTP server.
   ``--browser`` switches to the editor debug loop, where the browser itself
   executes the project and the server always serves current sources and
   assets straight from the directory. No zip file is written either way.
@@ -22,9 +23,16 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import tempfile
 from pathlib import Path
 
 from . import __version__
+from ._browser_runtime import (
+    browser_runtime_cache_dir,
+    ensure_browser_runtime,
+    export_browser_runtime,
+    fetch_browser_runtime,
+)
 from ._debug import DebugReleaseProvider, _project_signature, build_debug_release
 from ._host import BotLabError
 from ._native import require_native_runtime, run_native
@@ -57,12 +65,28 @@ def _set_verbose(args: argparse.Namespace) -> None:
 def _cmd_run(args: argparse.Namespace) -> int:
     _set_verbose(args)
     project_dir = Path(args.project_dir or ".").resolve()
+    if args.headless:
+        if args.out or args.no_server:
+            raise BotLabError("--headless cannot be combined with --out or --no-server.")
+        from ._runtime.run import main as run_headless
+
+        argv = ["botlab run --headless", str(project_dir)]
+        if args.report:
+            argv += ["--report", args.report]
+        try:
+            return run_headless(argv)
+        except KeyboardInterrupt:
+            print("[botlab.run] interrupted", file=sys.stderr)
+            return 130
+
     project = load_project(project_dir)
     if os.environ.get("BOTLAB_VERBOSE"):
         _print_project_summary(project)
     metadata = {"name": project.manifest["project"]["name"]}
 
     if args.out:
+        if args.report:
+            raise BotLabError("--report only applies to native runs, not --out.")
         package = create_release_package(project, metadata=metadata)
         release_zip = Path(args.out).resolve()
         release_zip.write_bytes(package)
@@ -78,10 +102,13 @@ def _cmd_run(args: argparse.Namespace) -> int:
             args.port,
             open_browser=not args.no_browser,
             entry="/embed.html",
+            ui_dir=ensure_browser_runtime(),
         )
         return 0
 
     if args.browser:
+        if args.report:
+            raise BotLabError("--report only applies to native runs, not --browser.")
         # Browser debug loop: the editor itself executes the project (MuJoCo
         # WASM + ONNX Runtime Web); this server only feeds it sources and
         # assets, rebuilding on change so edits land on reload.
@@ -101,6 +128,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
             args.port,
             open_browser=not args.no_browser,
             release_provider=provider,
+            ui_dir=ensure_browser_runtime(),
         )
         return 0
 
@@ -115,6 +143,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         host=args.host,
         port=args.port,
         open_browser=not args.no_browser,
+        report_path=args.report,
     )
 
 
@@ -158,12 +187,37 @@ def _cmd_ui(args: argparse.Namespace) -> int:
     if args.action == "status":
         target = ui_snapshot_dir()
         print(f"UI snapshot: {target}")
-        print(f"editor index.html present: {(target / 'index.html').is_file()}")
+        print(f"native viewer index.html present: {(target / 'index.html').is_file()}")
         print(f"embed.html present: {(target / 'embed.html').is_file()}")
+        print(f"browser runtime cache: {browser_runtime_cache_dir()}")
         return 0
     if args.action == "sync":
-        synced = sync_ui_snapshot(Path(args.botlab).resolve(), ui_snapshot_dir())
+        checkout = Path(args.botlab).expanduser().resolve()
+        synced = sync_ui_snapshot(checkout, ui_snapshot_dir())
         print(f"synced {synced} files into {ui_snapshot_dir()}")
+        cache_root = browser_runtime_cache_dir().parent
+        cache_root.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix=".sync-", dir=cache_root) as temporary:
+            archive = Path(temporary) / f"botlab-browser-runtime-{__version__}.zip"
+            exported = export_browser_runtime(checkout, archive)
+            runtime = fetch_browser_runtime(archive=archive)
+        print(f"cached browser runtime ({exported} files) at {runtime}")
+        return 0
+    if args.action == "export":
+        if not args.out:
+            raise BotLabError("`botlab ui export` requires --out <archive.zip>.")
+        archive = Path(args.out).expanduser().resolve()
+        exported = export_browser_runtime(Path(args.botlab).expanduser().resolve(), archive)
+        print(f"exported {exported} browser runtime files to {archive}")
+        return 0
+    if args.action == "fetch":
+        if args.archive and args.url:
+            raise BotLabError("Use only one of --archive and --url.")
+        runtime = fetch_browser_runtime(
+            archive=Path(args.archive).expanduser().resolve() if args.archive else None,
+            url=args.url,
+        )
+        print(f"installed browser runtime at {runtime}")
         return 0
     raise BotLabError(f"unknown ui subcommand {args.action!r}")
 
@@ -195,7 +249,7 @@ def _cmd_docs(args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="botlab",
-        description="Compile and run BotLab Python projects in the browser BotLab runtime.",
+        description="Compile, run, and export BotLab Python projects.",
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -206,11 +260,17 @@ def build_parser() -> argparse.ArgumentParser:
         "keeps the browser debug loop",
     )
     run.add_argument("project_dir", nargs="?", default=".", help="project directory (default: cwd)")
-    run.add_argument(
+    execution = run.add_mutually_exclusive_group()
+    execution.add_argument(
         "--browser",
         action="store_true",
         help="execute in the browser instead: serve the full editor debug loop "
         "(MuJoCo WASM + ONNX Runtime Web)",
+    )
+    execution.add_argument(
+        "--headless",
+        action="store_true",
+        help="run natively without a viewer or HTTP server (supports custom Python controllers)",
     )
     run.add_argument("--host", default="0.0.0.0", help="bind address (default: 0.0.0.0, LAN-reachable)")
     run.add_argument("--port", type=int, default=0, help="bind port (default: random free port)")
@@ -226,6 +286,12 @@ def build_parser() -> argparse.ArgumentParser:
         "unless --out is given)",
     )
     run.add_argument("--no-browser", action="store_true", help="do not auto-open the browser")
+    run.add_argument(
+        "--report",
+        metavar="PATH",
+        help="write a machine-readable JSON run report (base-pose series per robot, "
+        "resets with reasons, sim.metrics series) after the run",
+    )
     run.add_argument(
         "--verbose",
         action="store_true",
@@ -252,8 +318,11 @@ def build_parser() -> argparse.ArgumentParser:
     validate.set_defaults(func=_cmd_validate)
 
     ui = subparsers.add_parser("ui", help="manage the bundled BotLab UI snapshot")
-    ui.add_argument("action", choices=["sync", "status"])
+    ui.add_argument("action", choices=["sync", "status", "export", "fetch"])
     ui.add_argument("--botlab", default="~/Project/BotLab", help="path to a BotLab checkout")
+    ui.add_argument("--out", help="versioned runtime archive output for ui export")
+    ui.add_argument("--archive", help="offline runtime archive to install for ui fetch")
+    ui.add_argument("--url", help="runtime archive URL override for ui fetch")
     ui.set_defaults(func=_cmd_ui)
 
     docs = subparsers.add_parser(

@@ -4,6 +4,7 @@ import botlab_host
 from ._declaration import (
     _ResourceValues,
     _declare_resource,
+    _host_snapshot,
     _host_value,
     _non_empty_string,
 )
@@ -214,7 +215,7 @@ class Sensor:
         A camera with a single channel needs no argument; an `rgbd` camera carries two,
         so it has to be asked for one by name rather than have the SDK pick.
         """
-        snapshot = _host_value(botlab_host.observeSensor(self.id))
+        snapshot = _host_snapshot(botlab_host.observeSensor(self.id))
         if channel is None:
             available = sorted(snapshot)
             if len(available) != 1:

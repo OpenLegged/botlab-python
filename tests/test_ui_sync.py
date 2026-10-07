@@ -1,8 +1,11 @@
-"""UI snapshot packaging tests."""
+"""Small native viewer snapshot tests."""
 
 from pathlib import Path
 
-from botlab._ui_sync import sync_ui_snapshot
+import pytest
+
+from botlab._host import BotLabError
+from botlab._ui_sync import sync_ui_snapshot, validate_viewer_snapshot
 
 
 def _write(path: Path, content: str = "asset") -> None:
@@ -10,28 +13,40 @@ def _write(path: Path, content: str = "asset") -> None:
     path.write_text(content, encoding="utf-8")
 
 
-def test_sync_excludes_catalog_assets_but_keeps_runtime_files(tmp_path: Path):
+def test_sync_copies_only_display_closure_and_replaces_old_runtime(tmp_path: Path):
     checkout = tmp_path / "BotLab"
-    dist = checkout / "dist"
-    _write(dist / "index.html", "<html><head></head><body>editor</body></html>")
-    _write(dist / "embed.html", "<html><head></head><body>embed</body></html>")
-    _write(dist / "assets" / "main.js", "runtime")
-    _write(dist / "assets" / "models" / "runtime.bin", "nested runtime asset")
-    _write(dist / "templates" / "microduck" / "policy.onnx", "template")
-    _write(dist / "models" / "g1" / "scene.xml", "shared model")
-    _write(dist / "d" / "microduck" / "index.html", "demo")
-
+    dist = checkout / "dist-viewer"
+    _write(dist / "viewer.html", '<script type="module" src="/assets/viewer.js"></script>')
+    _write(dist / "assets/viewer.js", 'import "./chunk.js"; const icon="/favicon.svg"')
+    _write(dist / "assets/chunk.js", "const scene = 'Three.js'")
+    _write(dist / "favicon.svg", "<svg/>")
+    _write(dist / "assets/editor-unused.js", "unused")
     target = tmp_path / "ui"
-    _write(target / "templates" / "stale.bin", "stale")
+    _write(target / "wasm/obj-parser/objParser.wasm", "stale")
 
     copied = sync_ui_snapshot(checkout, target)
 
-    assert copied == 4
-    assert (target / "index.html").is_file()
-    assert "BOTLAB_LOCAL_PROJECT=true" in (target / "index.html").read_text()
-    assert (target / "embed.html").is_file()
-    assert (target / "assets" / "main.js").is_file()
-    assert (target / "assets" / "models" / "runtime.bin").is_file()
-    assert not (target / "templates").exists()
-    assert not (target / "models").exists()
-    assert not (target / "d").exists()
+    assert copied == 5
+    assert (target / "index.html").read_bytes() == (target / "embed.html").read_bytes()
+    assert (target / "assets/viewer.js").is_file()
+    assert (target / "assets/chunk.js").is_file()
+    assert (target / "favicon.svg").is_file()
+    assert not (target / "assets/editor-unused.js").exists()
+    assert not (target / "wasm").exists()
+    validate_viewer_snapshot(target)
+
+
+def test_sync_rejects_wasm_reference(tmp_path: Path):
+    dist = tmp_path / "dist-viewer"
+    _write(dist / "viewer.html", '<script src="/assets/viewer.js"></script>')
+    _write(dist / "assets/viewer.js", 'fetch("/assets/mujoco.wasm")')
+    with pytest.raises(BotLabError, match="WASM|simulation runtime"):
+        sync_ui_snapshot(tmp_path, tmp_path / "ui")
+
+
+def test_stale_full_snapshot_cannot_enter_wheel(tmp_path: Path):
+    _write(tmp_path / "index.html", "<html/>")
+    _write(tmp_path / "embed.html", "<html/>")
+    _write(tmp_path / "assets/mujoco.wasm")
+    with pytest.raises(BotLabError, match="WASM"):
+        validate_viewer_snapshot(tmp_path)

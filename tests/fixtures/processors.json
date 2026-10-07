@@ -1,0 +1,3494 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "type": "proc-clamp",
+      "config": {
+        "min": [
+          -1,
+          0
+        ],
+        "max": [
+          1,
+          10
+        ]
+      },
+      "inputDims": [
+        2
+      ],
+      "steps": [
+        {
+          "inputs": [
+            [
+              -5,
+              5
+            ]
+          ],
+          "outputs": [
+            [
+              -1,
+              5
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              0.5,
+              20
+            ]
+          ],
+          "outputs": [
+            [
+              0.5,
+              10
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              -0.25,
+              3
+            ]
+          ],
+          "outputs": [
+            [
+              -0.25,
+              3
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "type": "obs-constant",
+      "config": {
+        "dim": 3
+      },
+      "inputDims": [],
+      "steps": [
+        {
+          "inputs": [],
+          "outputs": [
+            [
+              0,
+              0,
+              0
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "type": "proc-math",
+      "config": {
+        "operation": "affine",
+        "scale": [
+          1,
+          2,
+          3
+        ],
+        "offset": [
+          10,
+          20,
+          30
+        ]
+      },
+      "inputDims": [
+        3
+      ],
+      "steps": [
+        {
+          "inputs": [
+            [
+              4,
+              5,
+              6
+            ]
+          ],
+          "outputs": [
+            [
+              14,
+              30,
+              48
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              0,
+              -1,
+              2
+            ]
+          ],
+          "outputs": [
+            [
+              10,
+              18,
+              36
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "type": "proc-math",
+      "config": {
+        "operation": "add",
+        "value": [
+          1,
+          2
+        ]
+      },
+      "inputDims": [
+        2
+      ],
+      "steps": [
+        {
+          "inputs": [
+            [
+              1,
+              2
+            ]
+          ],
+          "outputs": [
+            [
+              2,
+              4
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              -1,
+              0
+            ]
+          ],
+          "outputs": [
+            [
+              0,
+              2
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "type": "proc-vector-math",
+      "config": {
+        "operation": "add"
+      },
+      "inputDims": [
+        3,
+        3
+      ],
+      "steps": [
+        {
+          "inputs": [
+            [
+              1,
+              2,
+              3
+            ],
+            [
+              10,
+              20,
+              30
+            ]
+          ],
+          "outputs": [
+            [
+              11,
+              22,
+              33
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              1,
+              2,
+              3
+            ],
+            [
+              30,
+              20,
+              10
+            ]
+          ],
+          "outputs": [
+            [
+              31,
+              22,
+              13
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "type": "proc-vector-math",
+      "config": {
+        "operation": "multiply"
+      },
+      "inputDims": [
+        3,
+        1
+      ],
+      "steps": [
+        {
+          "inputs": [
+            [
+              1,
+              2,
+              3
+            ],
+            [
+              2
+            ]
+          ],
+          "outputs": [
+            [
+              2,
+              4,
+              6
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              1,
+              2,
+              3
+            ],
+            [
+              -1
+            ]
+          ],
+          "outputs": [
+            [
+              -1,
+              -2,
+              -3
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "type": "proc-mux",
+      "config": {
+        "channels": 2
+      },
+      "inputDims": [
+        2,
+        3
+      ],
+      "steps": [
+        {
+          "inputs": [
+            [
+              1,
+              2
+            ],
+            [
+              3,
+              4,
+              5
+            ]
+          ],
+          "outputs": [
+            [
+              1,
+              2,
+              3,
+              4,
+              5
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              -1,
+              -2
+            ],
+            [
+              0,
+              0,
+              0
+            ]
+          ],
+          "outputs": [
+            [
+              -1,
+              -2,
+              0,
+              0,
+              0
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "type": "proc-demux",
+      "config": {
+        "sizes": [
+          2,
+          1,
+          3
+        ]
+      },
+      "inputDims": [
+        6
+      ],
+      "steps": [
+        {
+          "inputs": [
+            [
+              1,
+              2,
+              3,
+              4,
+              5,
+              6
+            ]
+          ],
+          "outputs": [
+            [
+              1,
+              2
+            ],
+            [
+              3
+            ],
+            [
+              4,
+              5,
+              6
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              6,
+              5,
+              4,
+              3,
+              2,
+              1
+            ]
+          ],
+          "outputs": [
+            [
+              6,
+              5
+            ],
+            [
+              4
+            ],
+            [
+              3,
+              2,
+              1
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "type": "proc-reorder",
+      "config": {
+        "indices": [
+          3,
+          1,
+          1
+        ]
+      },
+      "inputDims": [
+        4
+      ],
+      "steps": [
+        {
+          "inputs": [
+            [
+              10,
+              20,
+              30,
+              40
+            ]
+          ],
+          "outputs": [
+            [
+              40,
+              20,
+              20
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              1,
+              2,
+              3,
+              4
+            ]
+          ],
+          "outputs": [
+            [
+              4,
+              2,
+              2
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "type": "proc-resize",
+      "config": {
+        "inputWidth": 2,
+        "inputHeight": 2,
+        "outputWidth": 1,
+        "outputHeight": 1,
+        "channels": 1
+      },
+      "inputDims": [
+        4
+      ],
+      "steps": [
+        {
+          "inputs": [
+            [
+              1,
+              2,
+              3,
+              4
+            ]
+          ],
+          "outputs": [
+            [
+              2.5
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              0,
+              4,
+              8,
+              12
+            ]
+          ],
+          "outputs": [
+            [
+              6
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "type": "proc-resize",
+      "config": {
+        "inputWidth": 2,
+        "inputHeight": 2,
+        "outputWidth": 2,
+        "outputHeight": 2,
+        "channels": 1,
+        "flipY": true
+      },
+      "inputDims": [
+        4
+      ],
+      "steps": [
+        {
+          "inputs": [
+            [
+              1,
+              2,
+              3,
+              4
+            ]
+          ],
+          "outputs": [
+            [
+              3,
+              4,
+              1,
+              2
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "type": "proc-reroute",
+      "config": {},
+      "inputDims": [
+        3
+      ],
+      "steps": [
+        {
+          "inputs": [
+            [
+              1,
+              -2,
+              3
+            ]
+          ],
+          "outputs": [
+            [
+              1,
+              -2,
+              3
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              0.5,
+              0.25,
+              0
+            ]
+          ],
+          "outputs": [
+            [
+              0.5,
+              0.25,
+              0
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "type": "proc-pd",
+      "config": {
+        "pdType": "position",
+        "kps": [
+          10
+        ],
+        "kds": [
+          0
+        ],
+        "effortLimit": [
+          100
+        ],
+        "targetBlendSteps": 3
+      },
+      "inputDims": [
+        1,
+        1,
+        1
+      ],
+      "steps": [
+        {
+          "inputs": [
+            [
+              10
+            ],
+            [
+              2
+            ],
+            [
+              0
+            ]
+          ],
+          "outputs": [
+            [
+              0
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              10
+            ],
+            [
+              2
+            ],
+            [
+              0
+            ]
+          ],
+          "outputs": [
+            [
+              40
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              10
+            ],
+            [
+              2
+            ],
+            [
+              0
+            ]
+          ],
+          "outputs": [
+            [
+              80
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              10
+            ],
+            [
+              2
+            ],
+            [
+              0
+            ]
+          ],
+          "outputs": [
+            [
+              80
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "type": "proc-pd",
+      "config": {
+        "pdType": "velocity",
+        "kps": [
+          2,
+          2
+        ],
+        "effortLimit": [
+          10
+        ]
+      },
+      "inputDims": [
+        2,
+        2
+      ],
+      "steps": [
+        {
+          "inputs": [
+            [
+              1,
+              2
+            ],
+            [
+              0.5,
+              1
+            ]
+          ],
+          "outputs": [
+            [
+              1,
+              2
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              3,
+              4
+            ],
+            [
+              3,
+              0
+            ]
+          ],
+          "outputs": [
+            [
+              0,
+              8
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "type": "proc-motion-reference",
+      "config": {
+        "motionSource": {
+          "kind": "registry",
+          "registryPrefix": "golden/motion-reference"
+        }
+      },
+      "inputDims": [],
+      "steps": [
+        {
+          "inputs": [],
+          "outputs": [
+            [
+              1,
+              1.0099999904632568,
+              1.0199999809265137,
+              1.0299999713897705,
+              1.0399999618530273,
+              1.0499999523162842,
+              1.059999942779541,
+              1.0700000524520874,
+              1.0800000429153442,
+              1.090000033378601,
+              1.100000023841858,
+              1.1100000143051147,
+              1.1200000047683716,
+              1.1299999952316284,
+              1.1399999856948853,
+              1.149999976158142,
+              1.159999966621399,
+              1.1699999570846558,
+              1.1799999475479126,
+              1.190000057220459,
+              1.2000000476837158,
+              1.2100000381469727,
+              1.2200000286102295,
+              1.2300000190734863,
+              1.2400000095367432,
+              1.25,
+              1.2599999904632568,
+              1.2699999809265137,
+              1.2799999713897705,
+              0.20000000298023224,
+              0.20100000500679016,
+              0.20200000703334808,
+              0.2029999941587448,
+              0.20399999618530273,
+              0.20499999821186066,
+              0.20600000023841858,
+              0.2070000022649765,
+              0.20800000429153442,
+              0.20900000631809235,
+              0.20999999344348907,
+              0.210999995470047,
+              0.21199999749660492,
+              0.21299999952316284,
+              0.21400000154972076,
+              0.2150000035762787,
+              0.2160000056028366,
+              0.21699999272823334,
+              0.21799999475479126,
+              0.21899999678134918,
+              0.2199999988079071,
+              0.22100000083446503,
+              0.22200000286102295,
+              0.22300000488758087,
+              0.2240000069141388,
+              0.22499999403953552,
+              0.22599999606609344,
+              0.22699999809265137,
+              0.2280000001192093,
+              0,
+              0,
+              0,
+              1,
+              0,
+              0,
+              1,
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "inputs": [],
+          "outputs": [
+            [
+              2,
+              2.009999990463257,
+              2.0199999809265137,
+              2.0299999713897705,
+              2.0399999618530273,
+              2.049999952316284,
+              2.059999942779541,
+              2.069999933242798,
+              2.0799999237060547,
+              2.0899999141693115,
+              2.0999999046325684,
+              2.109999895095825,
+              2.119999885559082,
+              2.130000114440918,
+              2.140000104904175,
+              2.1500000953674316,
+              2.1600000858306885,
+              2.1700000762939453,
+              2.180000066757202,
+              2.190000057220459,
+              2.200000047683716,
+              2.2100000381469727,
+              2.2200000286102295,
+              2.2300000190734863,
+              2.240000009536743,
+              2.25,
+              2.259999990463257,
+              2.2699999809265137,
+              2.2799999713897705,
+              0.30000001192092896,
+              0.3009999990463257,
+              0.3019999861717224,
+              0.30300000309944153,
+              0.30399999022483826,
+              0.3050000071525574,
+              0.3059999942779541,
+              0.3070000112056732,
+              0.30799999833106995,
+              0.3089999854564667,
+              0.3100000023841858,
+              0.3109999895095825,
+              0.31200000643730164,
+              0.31299999356269836,
+              0.3140000104904175,
+              0.3149999976158142,
+              0.3160000145435333,
+              0.31700000166893005,
+              0.3179999887943268,
+              0.3190000057220459,
+              0.3199999928474426,
+              0.32100000977516174,
+              0.32199999690055847,
+              0.3230000138282776,
+              0.3240000009536743,
+              0.32499998807907104,
+              0.32600000500679016,
+              0.3269999921321869,
+              0.328000009059906,
+              0.0707106739282608,
+              -0.0707106813788414,
+              0,
+              0.7071067690849304,
+              -0.7071067690849304,
+              0.7071067690849304,
+              0.7071067690849304,
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "inputs": [],
+          "outputs": [
+            [
+              3,
+              3.009999990463257,
+              3.0199999809265137,
+              3.0299999713897705,
+              3.0399999618530273,
+              3.049999952316284,
+              3.059999942779541,
+              3.069999933242798,
+              3.0799999237060547,
+              3.0899999141693115,
+              3.0999999046325684,
+              3.109999895095825,
+              3.119999885559082,
+              3.130000114440918,
+              3.140000104904175,
+              3.1500000953674316,
+              3.1600000858306885,
+              3.1700000762939453,
+              3.180000066757202,
+              3.190000057220459,
+              3.200000047683716,
+              3.2100000381469727,
+              3.2200000286102295,
+              3.2300000190734863,
+              3.240000009536743,
+              3.25,
+              3.259999990463257,
+              3.2699999809265137,
+              3.2799999713897705,
+              0.4000000059604645,
+              0.4009999930858612,
+              0.4020000100135803,
+              0.40299999713897705,
+              0.40400001406669617,
+              0.4050000011920929,
+              0.4059999883174896,
+              0.40700000524520874,
+              0.40799999237060547,
+              0.4090000092983246,
+              0.4099999964237213,
+              0.41100001335144043,
+              0.41200000047683716,
+              0.4129999876022339,
+              0.414000004529953,
+              0.41499999165534973,
+              0.41600000858306885,
+              0.4169999957084656,
+              0.4180000126361847,
+              0.4189999997615814,
+              0.41999998688697815,
+              0.42100000381469727,
+              0.421999990940094,
+              0.4230000078678131,
+              0.42399999499320984,
+              0.42500001192092896,
+              0.4259999990463257,
+              0.4269999861717224,
+              0.42800000309944153,
+              -3.42285466636838e-9,
+              -0.10000000894069672,
+              0,
+              0.7071067690849304,
+              -0.7071067690849304,
+              0.7071067690849304,
+              0.7071067690849304,
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "inputs": [],
+          "outputs": [
+            [
+              4,
+              4.010000228881836,
+              4.019999980926514,
+              4.03000020980835,
+              4.039999961853027,
+              4.050000190734863,
+              4.059999942779541,
+              4.070000171661377,
+              4.079999923706055,
+              4.090000152587891,
+              4.099999904632568,
+              4.110000133514404,
+              4.119999885559082,
+              4.130000114440918,
+              4.139999866485596,
+              4.150000095367432,
+              4.159999847412109,
+              4.170000076293945,
+              4.179999828338623,
+              4.190000057220459,
+              4.199999809265137,
+              4.210000038146973,
+              4.21999979019165,
+              4.230000019073486,
+              4.239999771118164,
+              4.25,
+              4.260000228881836,
+              4.269999980926514,
+              4.28000020980835,
+              0.5,
+              0.5009999871253967,
+              0.5019999742507935,
+              0.503000020980835,
+              0.5040000081062317,
+              0.5049999952316284,
+              0.5059999823570251,
+              0.5070000290870667,
+              0.5080000162124634,
+              0.5090000033378601,
+              0.5099999904632568,
+              0.5109999775886536,
+              0.5120000243186951,
+              0.5130000114440918,
+              0.5139999985694885,
+              0.5149999856948853,
+              0.515999972820282,
+              0.5170000195503235,
+              0.5180000066757202,
+              0.5189999938011169,
+              0.5199999809265137,
+              0.5210000276565552,
+              0.5220000147819519,
+              0.5230000019073486,
+              0.5239999890327454,
+              0.5249999761581421,
+              0.5260000228881836,
+              0.5270000100135803,
+              0.527999997138977,
+              -0.0707106813788414,
+              -0.0707106813788414,
+              0,
+              0.7071067690849304,
+              -0.7071067690849304,
+              0.7071067690849304,
+              0.7071067690849304,
+              0,
+              0
+            ]
+          ]
+        }
+      ],
+      "motionAssets": {
+        "body_pos_w.bin": "TlBaAAMAAAAFAAAAAQAAAAMAAAAEAAAAZgAAAAAAAADNzEw+mpmZPs3MzD3NzEw+mpmZPs3MTD7NzEw+mpmZPpqZmT7NzEw+mpmZPs3MzD7NzEw+mpmZPg==",
+        "body_quat_w.bin": "TlBaAAMAAAAFAAAAAQAAAAQAAAAEAAAAZgAAAAAAgD8AAAAAAAAAAAAAAABeg2w/AAAAAAAAAAAV78M+8wQ1PwAAAAAAAAAA8wQ1PxXvwz4AAAAAAAAAAF6DbD8yMY0kAAAAAAAAAAAAAIA/",
+        "body_lin_vel_w.bin": "TlBaAAMAAAAFAAAAAQAAAAMAAAAEAAAAZgAAAAAAAADNzMw9zcxMPs3MTD3NzMw9zcxMPs3MzD3NzMw9zcxMPpqZGT7NzMw9zcxMPs3MTD7NzMw9zcxMPg==",
+        "body_ang_vel_w.bin": "TlBaAAMAAAAFAAAAAQAAAAMAAAAEAAAAZgAAAArXIzwK16O8AAAAAArXIzwK16O8j8L1PArXIzwK16O8j8J1PQrXIzwK16O87FG4PQrXIzwK16O8j8L1PQ==",
+        "joint_pos.bin": "TlBaAAIAAAAFAAAAHQAAAAQAAABmAAAAAAAAAArXIzwK16M8j8L1PArXIz3NzEw9j8J1PSlcjz0K16M97FG4Pc3MzD2uR+E9j8L1PbgeBT4pXA8+mpkZPgrXIz57FC4+7FE4PlyPQj7NzEw+PQpXPq5HYT4fhWs+j8J1PgAAgD64HoU+cT2KPilcjz4AAIA/rkeBP1yPgj8K14M/uB6FP2Zmhj8Uroc/w/WIP3E9ij8fhYs/zcyMP3sUjj8pXI8/16OQP4XrkT8zM5M/4XqUP4/ClT89Cpc/7FGYP5qZmT9I4Zo/9iicP6RwnT9SuJ4/AACgP65HoT9cj6I/CtejPwAAAEDXowBArkcBQIXrAUBcjwJAMzMDQArXA0DhegRAuB4FQI/CBUBmZgZAPQoHQBSuB0DsUQhAw/UIQJqZCUBxPQpASOEKQB+FC0D2KAxAzcwMQKRwDUB7FA5AUrgOQClcD0AAABBA16MQQK5HEUCF6xFAAABAQNejQECuR0FAhetBQFyPQkAzM0NACtdDQOF6REC4HkVAj8JFQGZmRkA9CkdAFK5HQOxRSEDD9UhAmplJQHE9SkBI4UpAH4VLQPYoTEDNzExApHBNQHsUTkBSuE5AKVxPQAAAUEDXo1BArkdRQIXrUUAAAIBA7FGAQNejgEDD9YBArkeBQJqZgUCF64FAcT2CQFyPgkBI4YJAMzODQB+Fg0AK14NA9iiEQOF6hEDNzIRAuB6FQKRwhUCPwoVAexSGQGZmhkBSuIZAPQqHQClch0AUrodAAACIQOxRiEDXo4hAw/WIQA==",
+        "joint_vel.bin": "TlBaAAIAAAAFAAAAHQAAAAQAAABmAAAAzczMPRfZzj1g5dA9qvHSPfT91D09Ctc9hxbZPdEi2z0bL909ZDvfPa5H4T34U+M9QmDlPYts5z3VeOk9H4XrPWiR7T2yne89/KnxPUa28z2PwvU92c73PSPb+T1t5/s9tvP9PQAAAD4lBgE+SgwCPm8SAz7NzEw+8tJNPhfZTj47308+YOVQPoXrUT6q8VI+z/dTPvT9VD4ZBFY+PQpXPmIQWD6HFlk+rBxaPtEiWz72KFw+Gy9dPj81Xj5kO18+iUFgPq5HYT7TTWI++FNjPh1aZD5CYGU+ZmZmPotsZz6wcmg+1XhpPpqZmT6sHJo+vp+aPtEimz7jpZs+9iicPgisnD4bL50+LbKdPj81nj5SuJ4+ZDufPne+nz6JQaA+nMSgPq5HoT7ByqE+002iPuXQoj74U6M+CtejPh1apD4v3aQ+QmClPlTjpT5mZqY+eemmPotspz6e76c+zczMPt9PzT7y0s0+BFbOPhfZzj4pXM8+O9/PPk5i0D5g5dA+c2jRPoXr0T6YbtI+qvHSPrx00z7P99M+4XrUPvT91D4GgdU+GQTWPiuH1j49Ctc+UI3XPmIQ2D51k9g+hxbZPpqZ2T6sHNo+vp/aPtEi2z4AAAA/iUEAPxKDAD+cxAA/JQYBP65HAT83iQE/wcoBP0oMAj/TTQI/XI8CP+XQAj9vEgM/+FMDP4GVAz8K1wM/kxgEPx1aBD+mmwQ/L90EP7geBT9CYAU/y6EFP1TjBT/dJAY/ZmYGP/CnBj956QY/AisHPw==",
+        "fps.bin": "TlBaAAEAAAABAAAACAAAAGwAAAAyAAAAAAAAAA=="
+      }
+    },
+    {
+      "type": "proc-motion-sample",
+      "config": {
+        "motionSource": {
+          "kind": "registry",
+          "registryPrefix": "golden/motion-sample"
+        },
+        "channel": "joint_position",
+        "indices": [
+          1,
+          0
+        ],
+        "interpolation": "linear"
+      },
+      "inputDims": [
+        1
+      ],
+      "steps": [
+        {
+          "inputs": [
+            [
+              0
+            ]
+          ],
+          "outputs": [
+            [
+              10,
+              0
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              0.25
+            ]
+          ],
+          "outputs": [
+            [
+              20,
+              10
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              0.75
+            ]
+          ],
+          "outputs": [
+            [
+              40,
+              30
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              1.25
+            ]
+          ],
+          "outputs": [
+            [
+              50,
+              40
+            ]
+          ]
+        }
+      ],
+      "motionAssets": {
+        "body_pos_w.bin": "TlBaAAMAAAADAAAAAgAAAAMAAAAEAAAAZgAAAAAAgD8AAABAAABAQAAAEEEAABBBAAAQQQAAQEAAAIBAAACgQAAAAEEAAABBAAAAQQAAoEAAAMBAAADgQAAA4EAAAOBAAADgQA==",
+        "body_quat_w.bin": "TlBaAAMAAAADAAAAAgAAAAQAAAAEAAAAZgAAAAAAgD8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAAAAAACAvwAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAA==",
+        "body_lin_vel_w.bin": "TlBaAAMAAAADAAAAAgAAAAMAAAAEAAAAZgAAAAAAgD8AAABAAABAQAAAgEAAAKBAAADAQAAAQEAAAIBAAACgQAAAwEAAAOBAAAAAQQAAoEAAAMBAAADgQAAAAEEAABBBAAAgQQ==",
+        "body_ang_vel_w.bin": "TlBaAAMAAAADAAAAAgAAAAMAAAAEAAAAZgAAAAAAIEEAAKBBAADwQQAAIEIAAEhCAABwQgAA8EEAACBCAABIQgAAcEIAAIxCAACgQgAASEIAAHBCAACMQgAAoEIAALRCAADIQg==",
+        "joint_pos.bin": "TlBaAAIAAAADAAAAAgAAAAQAAABmAAAAAAAAAAAAIEEAAKBBAADwQQAAIEIAAEhC",
+        "joint_vel.bin": "TlBaAAIAAAADAAAAAgAAAAQAAABmAAAAAACAPwAAAEAAAEBAAACAQAAAoEAAAMBA",
+        "fps.bin": "TlBaAAEAAAABAAAACAAAAGwAAAACAAAAAAAAAA=="
+      }
+    },
+    {
+      "type": "proc-policy-input",
+      "config": {
+        "modeSlot": 0,
+        "policies": [
+          {
+            "key": "walk",
+            "mode": 1,
+            "outputSlot": 0,
+            "historyFrames": 2,
+            "fields": [
+              {
+                "kind": "copy",
+                "inputSlot": 1,
+                "length": 2
+              },
+              {
+                "kind": "previous-action",
+                "inputSlot": 2,
+                "length": 2
+              }
+            ]
+          }
+        ]
+      },
+      "inputDims": [
+        1,
+        2,
+        2
+      ],
+      "steps": [
+        {
+          "inputs": [
+            [
+              1
+            ],
+            [
+              0.5,
+              -0.5
+            ],
+            [
+              0.1,
+              0.2
+            ]
+          ],
+          "outputs": [
+            [
+              0.5,
+              -0.5,
+              0.10000000149011612,
+              0.20000000298023224,
+              0.5,
+              -0.5,
+              0.10000000149011612,
+              0.20000000298023224
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              1
+            ],
+            [
+              0.7,
+              -0.3
+            ],
+            [
+              0.3,
+              0.4
+            ]
+          ],
+          "outputs": [
+            [
+              0.5,
+              -0.5,
+              0.10000000149011612,
+              0.20000000298023224,
+              0.699999988079071,
+              -0.30000001192092896,
+              0.30000001192092896,
+              0.4000000059604645
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              2
+            ],
+            [
+              0.9,
+              0.9
+            ],
+            [
+              0.5,
+              0.6
+            ]
+          ],
+          "outputs": [
+            [
+              0.5,
+              -0.5,
+              0.10000000149011612,
+              0.20000000298023224,
+              0.699999988079071,
+              -0.30000001192092896,
+              0.30000001192092896,
+              0.4000000059604645
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              1
+            ],
+            [
+              0,
+              1
+            ],
+            [
+              0.7,
+              0.8
+            ]
+          ],
+          "outputs": [
+            [
+              0,
+              1,
+              0.699999988079071,
+              0.800000011920929,
+              0,
+              1,
+              0.699999988079071,
+              0.800000011920929
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "type": "proc-onehot-index",
+      "config": {
+        "threshold": 0.5,
+        "defaultIndex": 2
+      },
+      "inputDims": [
+        3
+      ],
+      "steps": [
+        {
+          "inputs": [
+            [
+              0.1,
+              0.2,
+              0.3
+            ]
+          ],
+          "outputs": [
+            [
+              2
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              0.1,
+              0.9,
+              0.3
+            ]
+          ],
+          "outputs": [
+            [
+              1
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              0.8,
+              0.2,
+              0.3
+            ]
+          ],
+          "outputs": [
+            [
+              0
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "type": "proc-one-hot",
+      "config": {
+        "size": 3
+      },
+      "inputDims": [
+        1
+      ],
+      "steps": [
+        {
+          "inputs": [
+            [
+              2
+            ]
+          ],
+          "outputs": [
+            [
+              0,
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              0
+            ]
+          ],
+          "outputs": [
+            [
+              1,
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              1
+            ]
+          ],
+          "outputs": [
+            [
+              0,
+              1,
+              0
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "type": "proc-rule-index",
+      "config": {
+        "rules": [
+          {
+            "value": 2,
+            "when": {
+              "any": [
+                {
+                  "index": 2,
+                  "op": "gt",
+                  "value": 0.1
+                },
+                {
+                  "all": [
+                    {
+                      "index": 0,
+                      "op": "gt",
+                      "value": 0.1
+                    },
+                    {
+                      "index": 1,
+                      "op": "gt",
+                      "value": 0.1
+                    }
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "value": 1,
+            "when": {
+              "index": 0,
+              "op": "gte",
+              "value": 0.1
+            }
+          }
+        ],
+        "defaultValue": 0
+      },
+      "inputDims": [
+        3
+      ],
+      "steps": [
+        {
+          "inputs": [
+            [
+              1,
+              1,
+              0
+            ]
+          ],
+          "outputs": [
+            [
+              2
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              1,
+              0,
+              0
+            ]
+          ],
+          "outputs": [
+            [
+              1
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              0,
+              0,
+              0
+            ]
+          ],
+          "outputs": [
+            [
+              0
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              0.05,
+              0.2,
+              0.2
+            ]
+          ],
+          "outputs": [
+            [
+              2
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "type": "proc-action-hook",
+      "config": {},
+      "inputDims": [
+        3
+      ],
+      "steps": [
+        {
+          "inputs": [
+            [
+              1,
+              -2,
+              3
+            ]
+          ],
+          "outputs": [
+            [
+              1,
+              -2,
+              3
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              4,
+              5,
+              6
+            ]
+          ],
+          "outputs": [
+            [
+              4,
+              5,
+              6
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              0,
+              0,
+              0
+            ]
+          ],
+          "outputs": [
+            [
+              0,
+              0,
+              0
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "type": "out-action",
+      "config": {},
+      "inputDims": [
+        4
+      ],
+      "steps": [
+        {
+          "inputs": [
+            [
+              0.1,
+              -0.2,
+              0.3,
+              0.4
+            ]
+          ],
+          "outputs": [
+            [
+              0.10000000149011612,
+              -0.20000000298023224,
+              0.30000001192092896,
+              0.4000000059604645
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              1,
+              2,
+              3,
+              4
+            ]
+          ],
+          "outputs": [
+            [
+              1,
+              2,
+              3,
+              4
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "type": "proc-delay",
+      "config": {
+        "totalSteps": 2,
+        "fill": -1
+      },
+      "inputDims": [
+        1,
+        1
+      ],
+      "steps": [
+        {
+          "inputs": [
+            [
+              10
+            ],
+            [
+              0
+            ]
+          ],
+          "outputs": [
+            [
+              -1
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              20
+            ],
+            [
+              0
+            ]
+          ],
+          "outputs": [
+            [
+              -1
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              30
+            ],
+            [
+              0
+            ]
+          ],
+          "outputs": [
+            [
+              10
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              40
+            ],
+            [
+              1
+            ]
+          ],
+          "outputs": [
+            [
+              30
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              50
+            ],
+            [
+              20
+            ]
+          ],
+          "outputs": [
+            [
+              50
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "type": "proc-history",
+      "config": {
+        "stackSize": 3,
+        "order": "oldest-first",
+        "stackMode": "isaacgym"
+      },
+      "inputDims": [
+        2
+      ],
+      "steps": [
+        {
+          "inputs": [
+            [
+              1,
+              10
+            ]
+          ],
+          "outputs": [
+            [
+              1,
+              10,
+              1,
+              10,
+              1,
+              10
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              2,
+              20
+            ]
+          ],
+          "outputs": [
+            [
+              1,
+              10,
+              1,
+              10,
+              2,
+              20
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              3,
+              30
+            ]
+          ],
+          "outputs": [
+            [
+              1,
+              10,
+              2,
+              20,
+              3,
+              30
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              4,
+              40
+            ]
+          ],
+          "outputs": [
+            [
+              2,
+              20,
+              3,
+              30,
+              4,
+              40
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "type": "proc-history",
+      "config": {
+        "stackSize": 3,
+        "sourceBufferSize": 5,
+        "sampleOffsets": [
+          -5,
+          -3,
+          -1
+        ],
+        "order": "oldest-first",
+        "stackMode": "isaacgym"
+      },
+      "inputDims": [
+        1
+      ],
+      "steps": [
+        {
+          "inputs": [
+            [
+              1
+            ]
+          ],
+          "outputs": [
+            [
+              1,
+              1,
+              1
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              2
+            ]
+          ],
+          "outputs": [
+            [
+              1,
+              1,
+              2
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              3
+            ]
+          ],
+          "outputs": [
+            [
+              1,
+              1,
+              3
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              4
+            ]
+          ],
+          "outputs": [
+            [
+              1,
+              2,
+              4
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              5
+            ]
+          ],
+          "outputs": [
+            [
+              1,
+              3,
+              5
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "type": "proc-compare",
+      "config": {
+        "operator": "gt",
+        "value": 1.5
+      },
+      "inputDims": [
+        1
+      ],
+      "steps": [
+        {
+          "inputs": [
+            [
+              2
+            ]
+          ],
+          "outputs": [
+            [
+              1
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              1
+            ]
+          ],
+          "outputs": [
+            [
+              0
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              3
+            ]
+          ],
+          "outputs": [
+            [
+              1
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "type": "proc-logic",
+      "config": {
+        "operator": "all"
+      },
+      "inputDims": [
+        1,
+        1,
+        1
+      ],
+      "steps": [
+        {
+          "inputs": [
+            [
+              1
+            ],
+            [
+              -2
+            ],
+            [
+              0.5
+            ]
+          ],
+          "outputs": [
+            [
+              1
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              1
+            ],
+            [
+              0
+            ],
+            [
+              0.5
+            ]
+          ],
+          "outputs": [
+            [
+              0
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              1
+            ],
+            [
+              1
+            ],
+            [
+              1
+            ]
+          ],
+          "outputs": [
+            [
+              1
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "type": "proc-where",
+      "config": {},
+      "inputDims": [
+        1,
+        2,
+        2
+      ],
+      "steps": [
+        {
+          "inputs": [
+            [
+              1
+            ],
+            [
+              10,
+              20
+            ],
+            [
+              -10,
+              -20
+            ]
+          ],
+          "outputs": [
+            [
+              10,
+              20
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              0
+            ],
+            [
+              10,
+              20
+            ],
+            [
+              -10,
+              -20
+            ]
+          ],
+          "outputs": [
+            [
+              -10,
+              -20
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              0.5
+            ],
+            [
+              30,
+              40
+            ],
+            [
+              -30,
+              -40
+            ]
+          ],
+          "outputs": [
+            [
+              30,
+              40
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "type": "proc-state-machine",
+      "config": {
+        "initialState": 0,
+        "transitions": [
+          {
+            "from": [
+              0
+            ],
+            "command": 1,
+            "to": 1
+          },
+          {
+            "from": [
+              1
+            ],
+            "afterSteps": 3,
+            "to": 0
+          }
+        ]
+      },
+      "inputDims": [
+        1
+      ],
+      "steps": [
+        {
+          "inputs": [
+            [
+              0
+            ]
+          ],
+          "outputs": [
+            [
+              0
+            ],
+            [
+              0
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              1
+            ]
+          ],
+          "outputs": [
+            [
+              1
+            ],
+            [
+              0
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              0
+            ]
+          ],
+          "outputs": [
+            [
+              1
+            ],
+            [
+              1
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              0
+            ]
+          ],
+          "outputs": [
+            [
+              1
+            ],
+            [
+              2
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              0
+            ]
+          ],
+          "outputs": [
+            [
+              0
+            ],
+            [
+              0
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "type": "proc-fsm",
+      "config": {
+        "initialMode": 0,
+        "transitions": [
+          {
+            "from": [
+              0
+            ],
+            "command": 1,
+            "to": 1
+          },
+          {
+            "from": [
+              1
+            ],
+            "command": 2,
+            "to": 0
+          }
+        ]
+      },
+      "inputDims": [
+        1
+      ],
+      "steps": [
+        {
+          "inputs": [
+            [
+              0
+            ]
+          ],
+          "outputs": [
+            [
+              0
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              1
+            ]
+          ],
+          "outputs": [
+            [
+              1
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              1
+            ]
+          ],
+          "outputs": [
+            [
+              1
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              2
+            ]
+          ],
+          "outputs": [
+            [
+              0
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              2
+            ]
+          ],
+          "outputs": [
+            [
+              0
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "type": "proc-mode-switch",
+      "config": {
+        "initialMode": 2,
+        "transitions": [
+          {
+            "from": "any",
+            "command": 7,
+            "to": 1
+          },
+          {
+            "from": [
+              1
+            ],
+            "command": 3,
+            "to": 2
+          }
+        ]
+      },
+      "inputDims": [
+        1
+      ],
+      "steps": [
+        {
+          "inputs": [
+            [
+              7
+            ]
+          ],
+          "outputs": [
+            [
+              1
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              0
+            ]
+          ],
+          "outputs": [
+            [
+              1
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              3
+            ]
+          ],
+          "outputs": [
+            [
+              2
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              3
+            ]
+          ],
+          "outputs": [
+            [
+              2
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "type": "proc-select",
+      "config": {
+        "passiveMode": 0,
+        "slotModes": [
+          1,
+          2
+        ]
+      },
+      "inputDims": [
+        1,
+        2,
+        2
+      ],
+      "steps": [
+        {
+          "inputs": [
+            [
+              1
+            ],
+            [
+              9,
+              9
+            ],
+            [
+              1,
+              2
+            ]
+          ],
+          "outputs": [
+            [
+              1,
+              2
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              2
+            ],
+            [
+              9,
+              9
+            ],
+            [
+              10,
+              20
+            ]
+          ],
+          "outputs": [
+            [
+              9,
+              9
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              0
+            ],
+            [
+              9,
+              9
+            ],
+            [
+              1,
+              2
+            ]
+          ],
+          "outputs": [
+            [
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              3
+            ],
+            [
+              9,
+              9
+            ],
+            [
+              10,
+              20
+            ]
+          ],
+          "outputs": [
+            [
+              9,
+              9
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "type": "proc-mode-select",
+      "config": {
+        "passiveMode": 9,
+        "slotModes": [
+          1
+        ]
+      },
+      "inputDims": [
+        1,
+        3,
+        3
+      ],
+      "steps": [
+        {
+          "inputs": [
+            [
+              1
+            ],
+            [
+              7,
+              7,
+              7
+            ],
+            [
+              1,
+              2,
+              3
+            ]
+          ],
+          "outputs": [
+            [
+              1,
+              2,
+              3
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              9
+            ],
+            [
+              7,
+              7,
+              7
+            ],
+            [
+              1,
+              2,
+              3
+            ]
+          ],
+          "outputs": [
+            [
+              0,
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              5
+            ],
+            [
+              7,
+              7,
+              7
+            ],
+            [
+              1,
+              2,
+              3
+            ]
+          ],
+          "outputs": [
+            [
+              7,
+              7,
+              7
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "type": "proc-phase-clock",
+      "config": {
+        "periodSteps": 100
+      },
+      "inputDims": [
+        1
+      ],
+      "steps": [
+        {
+          "inputs": [
+            [
+              0
+            ]
+          ],
+          "outputs": [
+            [
+              1,
+              0
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              25
+            ]
+          ],
+          "outputs": [
+            [
+              6.123234262925839e-17,
+              1
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              50
+            ]
+          ],
+          "outputs": [
+            [
+              -1,
+              1.2246468525851679e-16
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "type": "proc-clock",
+      "config": {
+        "unit": "seconds"
+      },
+      "inputDims": [],
+      "steps": [
+        {
+          "inputs": [],
+          "outputs": [
+            [
+              0
+            ]
+          ]
+        },
+        {
+          "inputs": [],
+          "outputs": [
+            [
+              0.019999999552965164
+            ]
+          ]
+        },
+        {
+          "inputs": [],
+          "outputs": [
+            [
+              0.03999999910593033
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "type": "proc-clock",
+      "config": {
+        "unit": "steps"
+      },
+      "inputDims": [],
+      "steps": [
+        {
+          "inputs": [],
+          "outputs": [
+            [
+              0
+            ]
+          ]
+        },
+        {
+          "inputs": [],
+          "outputs": [
+            [
+              1
+            ]
+          ]
+        },
+        {
+          "inputs": [],
+          "outputs": [
+            [
+              2
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "type": "proc-spatial-math",
+      "config": {
+        "operation": "quat_rotate"
+      },
+      "inputDims": [
+        4,
+        3
+      ],
+      "steps": [
+        {
+          "inputs": [
+            [
+              0.7071067811865476,
+              0,
+              0,
+              0.7071067811865476
+            ],
+            [
+              1,
+              0,
+              0
+            ]
+          ],
+          "outputs": [
+            [
+              0,
+              1,
+              0
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              0.7071067811865476,
+              0,
+              0,
+              0.7071067811865476
+            ],
+            [
+              1,
+              1,
+              1
+            ]
+          ],
+          "outputs": [
+            [
+              -1,
+              1,
+              1
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              1,
+              0,
+              0,
+              0
+            ],
+            [
+              1,
+              2,
+              3
+            ]
+          ],
+          "outputs": [
+            [
+              1,
+              2,
+              3
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "type": "proc-spatial-math",
+      "config": {
+        "operation": "quat_to_matrix"
+      },
+      "inputDims": [
+        4
+      ],
+      "steps": [
+        {
+          "inputs": [
+            [
+              0.7071067811865476,
+              0,
+              0,
+              0.7071067811865476
+            ]
+          ],
+          "outputs": [
+            [
+              1.1102230246251565e-16,
+              -1,
+              0,
+              1,
+              1.1102230246251565e-16,
+              0,
+              0,
+              0,
+              1
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              1,
+              0,
+              0,
+              0
+            ]
+          ],
+          "outputs": [
+            [
+              1,
+              0,
+              0,
+              0,
+              1,
+              0,
+              0,
+              0,
+              1
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "type": "proc-spatial-math",
+      "config": {
+        "operation": "quat_slerp"
+      },
+      "inputDims": [
+        4,
+        4,
+        1
+      ],
+      "steps": [
+        {
+          "inputs": [
+            [
+              1,
+              0,
+              0,
+              0
+            ],
+            [
+              -1,
+              0,
+              0,
+              0
+            ],
+            [
+              0.5
+            ]
+          ],
+          "outputs": [
+            [
+              1,
+              0,
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              1,
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              1,
+              0,
+              0
+            ],
+            [
+              0.25
+            ]
+          ],
+          "outputs": [
+            [
+              0.9238795042037964,
+              0.3826834261417389,
+              0,
+              0
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "type": "proc-signal-math",
+      "config": {
+        "operation": "sum",
+        "width": 2
+      },
+      "inputDims": [
+        4
+      ],
+      "steps": [
+        {
+          "inputs": [
+            [
+              1,
+              2,
+              3,
+              4
+            ]
+          ],
+          "outputs": [
+            [
+              3,
+              7
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              5,
+              6,
+              7,
+              8
+            ]
+          ],
+          "outputs": [
+            [
+              11,
+              15
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "type": "proc-signal-math",
+      "config": {
+        "operation": "normalize",
+        "width": 2
+      },
+      "inputDims": [
+        4
+      ],
+      "steps": [
+        {
+          "inputs": [
+            [
+              3,
+              4,
+              0,
+              0
+            ]
+          ],
+          "outputs": [
+            [
+              0.6000000238418579,
+              0.800000011920929,
+              0,
+              0
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              0,
+              2,
+              3,
+              4
+            ]
+          ],
+          "outputs": [
+            [
+              0,
+              1,
+              0.6000000238418579,
+              0.800000011920929
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "type": "proc-signal-math",
+      "config": {
+        "operation": "dot",
+        "width": 3
+      },
+      "inputDims": [
+        6,
+        3
+      ],
+      "steps": [
+        {
+          "inputs": [
+            [
+              1,
+              0,
+              0,
+              0,
+              1,
+              0
+            ],
+            [
+              2,
+              3,
+              4
+            ]
+          ],
+          "outputs": [
+            [
+              2,
+              3
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "type": "proc-signal-noise",
+      "config": {
+        "distribution": "gaussian",
+        "scale": [
+          0.5,
+          2
+        ],
+        "bias": 1,
+        "seed": 42
+      },
+      "inputDims": [
+        2
+      ],
+      "steps": [
+        {
+          "inputs": [
+            [
+              10,
+              20
+            ]
+          ],
+          "outputs": [
+            [
+              11.324345588684082,
+              21.80206298828125
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              10,
+              20
+            ]
+          ],
+          "outputs": [
+            [
+              11.112589836120605,
+              23.58564567565918
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              10,
+              20
+            ]
+          ],
+          "outputs": [
+            [
+              11.479019165039062,
+              21.311676025390625
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              10,
+              20
+            ]
+          ],
+          "outputs": [
+            [
+              11.400492668151855,
+              22.47544288635254
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "type": "proc-signal-filter",
+      "config": {
+        "kind": "ema",
+        "alpha": 0.25
+      },
+      "inputDims": [
+        1
+      ],
+      "steps": [
+        {
+          "inputs": [
+            [
+              8
+            ]
+          ],
+          "outputs": [
+            [
+              8
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              0
+            ]
+          ],
+          "outputs": [
+            [
+              6
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              4
+            ]
+          ],
+          "outputs": [
+            [
+              5.5
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              2
+            ]
+          ],
+          "outputs": [
+            [
+              4.625
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "type": "proc-signal-filter",
+      "config": {
+        "kind": "moving_average",
+        "window": 3
+      },
+      "inputDims": [
+        1
+      ],
+      "steps": [
+        {
+          "inputs": [
+            [
+              3
+            ]
+          ],
+          "outputs": [
+            [
+              3
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              6
+            ]
+          ],
+          "outputs": [
+            [
+              4.5
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              9
+            ]
+          ],
+          "outputs": [
+            [
+              6
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              12
+            ]
+          ],
+          "outputs": [
+            [
+              9
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              15
+            ]
+          ],
+          "outputs": [
+            [
+              12
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "type": "proc-signal-filter",
+      "config": {
+        "kind": "difference",
+        "dt": 0.5
+      },
+      "inputDims": [
+        1
+      ],
+      "steps": [
+        {
+          "inputs": [
+            [
+              3
+            ]
+          ],
+          "outputs": [
+            [
+              0
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              4
+            ]
+          ],
+          "outputs": [
+            [
+              2
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              6
+            ]
+          ],
+          "outputs": [
+            [
+              4
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "type": "proc-signal-send",
+      "config": {
+        "signalLabel": "golden-signal"
+      },
+      "inputDims": [
+        3
+      ],
+      "steps": [
+        {
+          "inputs": [
+            [
+              1,
+              2,
+              3
+            ]
+          ],
+          "outputs": [
+            [
+              1,
+              2,
+              3
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              4,
+              5,
+              6
+            ]
+          ],
+          "outputs": [
+            [
+              4,
+              5,
+              6
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "type": "proc-signal-receive",
+      "config": {
+        "signalLabel": "golden-signal"
+      },
+      "inputDims": [
+        2
+      ],
+      "steps": [
+        {
+          "inputs": [
+            [
+              0.5,
+              -0.5
+            ]
+          ],
+          "outputs": [
+            [
+              0.5,
+              -0.5
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              2,
+              4
+            ]
+          ],
+          "outputs": [
+            [
+              2,
+              4
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "type": "out-mujoco",
+      "config": {},
+      "inputDims": [
+        3,
+        2
+      ],
+      "steps": [
+        {
+          "inputs": [
+            [
+              1,
+              2,
+              3
+            ],
+            [
+              4,
+              5
+            ]
+          ],
+          "outputs": [
+            [
+              1,
+              2,
+              3,
+              4,
+              5
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              -1,
+              -2,
+              -3
+            ],
+            [
+              0,
+              0
+            ]
+          ],
+          "outputs": [
+            [
+              -1,
+              -2,
+              -3,
+              0,
+              0
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "type": "out-scope",
+      "config": {},
+      "inputDims": [
+        2
+      ],
+      "steps": [
+        {
+          "inputs": [
+            [
+              1,
+              2
+            ]
+          ],
+          "outputs": []
+        },
+        {
+          "inputs": [
+            [
+              3,
+              4
+            ]
+          ],
+          "outputs": []
+        }
+      ]
+    },
+    {
+      "type": "out-logger",
+      "config": {},
+      "inputDims": [
+        1,
+        2
+      ],
+      "steps": [
+        {
+          "inputs": [
+            [
+              1
+            ],
+            [
+              2,
+              3
+            ]
+          ],
+          "outputs": []
+        },
+        {
+          "inputs": [
+            [
+              -1
+            ],
+            [
+              -2,
+              -3
+            ]
+          ],
+          "outputs": []
+        }
+      ]
+    },
+    {
+      "type": "scene-robot",
+      "config": {
+        "joint2motorIdx": [
+          2,
+          0,
+          1
+        ]
+      },
+      "inputDims": [
+        2,
+        1
+      ],
+      "steps": [
+        {
+          "inputs": [
+            [
+              10,
+              20
+            ],
+            [
+              30
+            ]
+          ],
+          "outputs": [
+            [
+              20,
+              30,
+              10
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              1,
+              2
+            ],
+            [
+              3
+            ]
+          ],
+          "outputs": [
+            [
+              2,
+              3,
+              1
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "type": "scene-terrain",
+      "config": {},
+      "inputDims": [
+        2,
+        2
+      ],
+      "steps": [
+        {
+          "inputs": [
+            [
+              1,
+              2
+            ],
+            [
+              3,
+              4
+            ]
+          ],
+          "outputs": [
+            [
+              1,
+              2,
+              3,
+              4
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              5,
+              6
+            ],
+            [
+              7,
+              8
+            ]
+          ],
+          "outputs": [
+            [
+              5,
+              6,
+              7,
+              8
+            ]
+          ]
+        }
+      ]
+    }
+  ],
+  "pendingTypes": [
+    "obs-qpos",
+    "obs-qvel",
+    "obs-imu",
+    "obs-base-height",
+    "obs-base-lin-vel",
+    "obs-base-ang-vel",
+    "obs-projected-gravity",
+    "obs-commands",
+    "obs-dof-pos",
+    "obs-dof-vel",
+    "obs-actions",
+    "obs-camera",
+    "obs-mujoco-query",
+    "obs-height-scan",
+    "model-onnx"
+  ]
+}

@@ -15,6 +15,7 @@ import re
 
 import numpy as np
 
+from ..sdk._runtime_types import Frame
 
 _ACTUATOR_TAG_PATTERN = re.compile(
     r"<\s*(motor|position|velocity|intvelocity|damper|cylinder|muscle|adhesion|general)\b",
@@ -199,6 +200,89 @@ def mapped_index(indices, index, source_length, field_name):
     return int(source_index)
 
 
+def compose_scoped_actions(layouts, actions, current_ctrl):
+    """Compose per-robot actions into one atomic (ctrl, substep_pd) payload.
+
+    ``layouts``: ``{robot_id: {"dimension", "qpos_offset", "qvel_offset",
+    "actuator_start"}}``（``MujocoPhysics.robot_layout``）；``actions``:
+    ``{robot_id: ("ctrl", values) | ("pd", view)}``，PD view 的索引是机器人
+    局部值，这里统一平移到组合模型的绝对下标。对照
+    src/domain/python/pythonScopedActions.ts 的 composePythonRobotActions。
+    """
+    full_ctrl = np.asarray(current_ctrl, dtype=np.float64).copy()
+    owners = {}
+    pd_parts = []
+    has_raw = False
+    for robot_id, (kind, payload) in actions.items():
+        layout = layouts[robot_id]
+        dimension = layout["dimension"]
+        actuator_start = layout["actuator_start"]
+        for index in range(actuator_start, actuator_start + dimension):
+            owner = owners.get(index)
+            if owner is not None:
+                raise RuntimeError(
+                    f"[botlab] Robot actuator scopes overlap at ctrl index "
+                    f"{index}: {owner}, {robot_id}"
+                )
+            owners[index] = robot_id
+        if kind == "ctrl":
+            vector = np.asarray(payload, dtype=np.float64).ravel()
+            if vector.shape[0] != dimension:
+                raise ValueError(
+                    f"[botlab] {robot_id} ctrl action must contain {dimension} values"
+                )
+            if not np.all(np.isfinite(vector)):
+                raise ValueError(f"[botlab] {robot_id} ctrl action must be finite")
+            full_ctrl[actuator_start : actuator_start + dimension] = vector
+            has_raw = True
+        else:
+            pd_parts.append((robot_id, layout, payload))
+
+    ctrl = full_ctrl if has_raw else None
+    if not pd_parts:
+        return ctrl, None
+
+    merged = {name: [] for name in (
+        "target", "kps", "kds", "effort_min", "effort_max",
+        "qpos_indices", "qvel_indices", "ctrl_indices",
+    )}
+    for robot_id, layout, view in pd_parts:
+        dimension = layout["dimension"]
+        identity = np.arange(dimension, dtype=np.int64)
+        for key, base in (
+            ("qpos_indices", layout["qpos_offset"]),
+            ("qvel_indices", layout["qvel_offset"]),
+            ("ctrl_indices", layout["actuator_start"]),
+        ):
+            local = view.get(key)
+            if local is None:
+                local = identity
+            else:
+                local = np.asarray(local, dtype=np.int64).ravel()
+                if local.shape[0] != dimension:
+                    raise ValueError(
+                        f"[botlab] {robot_id} substep PD {key} must contain "
+                        f"{dimension} values"
+                    )
+                if np.any(local < 0) or np.any(local >= dimension):
+                    raise ValueError(
+                        f"[botlab] {robot_id} substep PD {key} index is outside "
+                        f"robot action dimension {dimension}"
+                    )
+            merged[key].append(base + local)
+        for name in ("target", "kps", "kds", "effort_min", "effort_max"):
+            merged[name].append(np.asarray(view[name], dtype=np.float64).ravel())
+
+    payload = {
+        name: np.concatenate(merged[name])
+        for name in ("target", "kps", "kds", "effort_min", "effort_max")
+    }
+    payload["qpos_indices"] = np.concatenate(merged["qpos_indices"]).astype(np.int64)
+    payload["qvel_indices"] = np.concatenate(merged["qvel_indices"]).astype(np.int64)
+    payload["ctrl_indices"] = np.concatenate(merged["ctrl_indices"]).astype(np.int64)
+    return ctrl, payload
+
+
 class PreparedSubstepPd:
     def __init__(self, pd, qpos, qvel, ctrl):
         target = np.asarray(pd["target"], dtype=np.float64)
@@ -308,6 +392,7 @@ class MujocoPhysics:
         path_resolver=None,
         initial_qpos=None,
         initial_qvel=None,
+        robot_states=None,
     ):
         self.model = model
         self.data = data
@@ -320,21 +405,40 @@ class MujocoPhysics:
             resource for resource in self._resources.values()
             if resource.get("kind") == "robot"
         ]
-        if len(robots) > 1:
-            raise ValueError(
-                "[botlab] local MujocoPhysics supports exactly one robot resource"
-            )
+        self._robots = {str(resource["id"]): resource for resource in robots}
+        self._robot_ids = [str(resource["id"]) for resource in robots]
         self._robot = robots[0] if robots else None
-        self._initial_qpos = self._state_vector(
-            initial_qpos, data.qpos, "initialQpos"
-        )
-        self._initial_qvel = self._state_vector(
-            initial_qvel, data.qvel, "initialQvel"
-        )
-        self._pending_ctrl = None
-        self._pending_pd = None
+        if self._robot_ids:
+            from ._compose import resolve_robot_scopes
+
+            self._scopes = resolve_robot_scopes(
+                mujoco_module, model, self._robot_ids
+            )
+        else:
+            self._scopes = {}
+        if robot_states is not None:
+            # Composed scene: reset to model defaults, place each robot's
+            # initial state at its scope, then snapshot the composed state so
+            # reset() replays it deterministically.
+            from ._compose import apply_composed_initial_state
+
+            self._mujoco.mj_resetData(model, data)
+            apply_composed_initial_state(mujoco_module, model, data, robot_states)
+            self._mujoco.mj_forward(model, data)
+            self._initial_qpos = np.asarray(data.qpos, dtype=np.float64).copy()
+            self._initial_qvel = np.asarray(data.qvel, dtype=np.float64).copy()
+        else:
+            self._initial_qpos = self._state_vector(
+                initial_qpos, data.qpos, "initialQpos"
+            )
+            self._initial_qvel = self._state_vector(
+                initial_qvel, data.qvel, "initialQvel"
+            )
+        self._pending = {}
+        self._physics_step_index = 0
         self._sensor_sequences = {}
-        self._apply_initial_state()
+        if robot_states is None:
+            self._apply_initial_state()
 
     @staticmethod
     def _state_vector(values, current, label):
@@ -371,16 +475,17 @@ class MujocoPhysics:
         return resource
 
     def _robot_resource(self, robot_id):
-        if self._robot is None:
+        if not self._robots:
             raise RuntimeError(
                 "[botlab] custom-controller access needs a declared robot resource"
             )
-        if str(robot_id) != self._robot["id"]:
+        resource = self._robots.get(str(robot_id))
+        if resource is None:
             raise ValueError(
-                f'[botlab] robot "{robot_id}" is not the active local robot '
-                f'"{self._robot["id"]}"'
+                f'[botlab] unknown robot "{robot_id}" '
+                f"(declared: {', '.join(self._robot_ids)})"
             )
-        return self._robot
+        return resource
 
     @staticmethod
     def _non_negative_integer(value, label):
@@ -396,6 +501,8 @@ class MujocoPhysics:
         return number
 
     def _robot_layout(self, robot_id):
+        """Scope-aware layout: config offsets are robot-local; the composed
+        model shifts them by the robot's scope start."""
         resource = self._robot_resource(robot_id)
         config = resource.get("config") or {}
         dimension = self._positive_integer(
@@ -407,22 +514,29 @@ class MujocoPhysics:
         qvel_offset = self._non_negative_integer(
             config.get("jointQvelOffset"), f"{robot_id}.jointQvelOffset"
         )
-        if qpos_offset + dimension > len(self.data.qpos):
+        scope = self._scopes.get(str(robot_id))
+        if scope is None:
+            raise ValueError(f'[botlab] MuJoCo scope for robot "{robot_id}" is unavailable')
+        abs_qpos = scope["qpos_start"] + qpos_offset
+        abs_qvel = scope["qvel_start"] + qvel_offset
+        if abs_qpos + dimension > len(self.data.qpos):
             raise ValueError(
                 f"[botlab] {robot_id} joint qpos range is outside MuJoCo qpos"
             )
-        if qvel_offset + dimension > len(self.data.qvel):
+        if abs_qvel + dimension > len(self.data.qvel):
             raise ValueError(
                 f"[botlab] {robot_id} joint qvel range is outside MuJoCo qvel"
             )
-        if dimension > len(self.data.ctrl):
+        actuator_start = scope["actuator_start"]
+        if actuator_start + dimension > len(self.data.ctrl):
             raise ValueError(
                 f"[botlab] {robot_id} action dimension {dimension} exceeds "
                 f"MuJoCo ctrl length {len(self.data.ctrl)}"
             )
-        return resource, dimension, qpos_offset, qvel_offset
+        return resource, dimension, abs_qpos, abs_qvel, scope
 
     def _actuator_joint_order(self, resource, dimension):
+        """Robot-local actuator ctrl indices (actuatorJointOrder preset)."""
         raw = (resource.get("config") or {}).get("actuatorJointOrder")
         if raw is None:
             return np.arange(dimension, dtype=np.int64)
@@ -433,13 +547,13 @@ class MujocoPhysics:
                 isinstance(value, bool)
                 or not isinstance(value, (int, np.integer))
                 or value < 0
-                or value >= len(self.data.ctrl)
+                or value >= dimension
                 for value in raw
             )
         ):
             raise ValueError(
                 f"[botlab] {resource['id']}.actuatorJointOrder must contain "
-                f"{dimension} valid MuJoCo ctrl indices"
+                f"{dimension} robot-local ctrl indices"
             )
         if len(set(raw)) != dimension:
             raise ValueError(
@@ -469,17 +583,14 @@ class MujocoPhysics:
     def qvel(self):
         return self.data.qvel
 
-    def step_substeps(self, steps, ctrl=None, substep_pd=None):
+    def step_substeps(self, steps, ctrl=None, substep_pd=None, observer=None):
         data = self.data
-        if (ctrl is not None or substep_pd is not None) and (
-            self._pending_ctrl is not None or self._pending_pd is not None
-        ):
+        if (ctrl is not None or substep_pd is not None) and self._pending:
             raise RuntimeError(
                 "[botlab] explicit plan control conflicts with a custom-controller action"
             )
-        if ctrl is None and substep_pd is None:
-            ctrl = self._pending_ctrl
-            substep_pd = self._pending_pd
+        if ctrl is None and substep_pd is None and self._pending:
+            ctrl, substep_pd = self.compose_payloads(self._pending)
         if ctrl is not None:
             if len(ctrl) != len(data.ctrl):
                 raise ValueError(
@@ -491,18 +602,35 @@ class MujocoPhysics:
             PreparedSubstepPd(substep_pd, data.qpos, data.qvel, data.ctrl)
             if substep_pd is not None else None
         )
+        timestep = float(self.model.opt.timestep)
         for _ in range(steps):
             if prepared is not None:
                 prepared.apply(data.qpos, data.qvel, data.ctrl)
             data.qfrc_applied[:] = 0
             self._mujoco.mj_step(self.model, data)
-        self._pending_ctrl = None
-        self._pending_pd = None
+            self._physics_step_index += 1
+            if observer is not None:
+                try:
+                    observer(Frame(timestep, float(data.time), self._physics_step_index))
+                except Exception as error:
+                    raise RuntimeError(
+                        "[botlab] on_substep observer failed at physics step "
+                        f"{self._physics_step_index}: {error}"
+                    ) from error
+        self._pending = {}
+
+    def compose_payloads(self, actions):
+        """Compose pending per-robot actions (see compose_scoped_actions)."""
+        return compose_scoped_actions(
+            {robot_id: self.robot_layout(robot_id) for robot_id in actions},
+            actions,
+            self.data.ctrl,
+        )
 
     def reset(self):
         self._mujoco.mj_resetData(self.model, self.data)
-        self._pending_ctrl = None
-        self._pending_pd = None
+        self._pending = {}
+        self._physics_step_index = 0
         self._apply_initial_state()
 
     def should_stop(self):
@@ -526,7 +654,10 @@ class MujocoPhysics:
             fill_observation(binding, context)
 
     def robot_observation(self, robot_id):
-        _resource, dimension, qpos_offset, qvel_offset = self._robot_layout(robot_id)
+        _resource, dimension, qpos_offset, qvel_offset, scope = self._robot_layout(robot_id)
+        actuator_start = scope["actuator_start"]
+        base = scope["qpos_start"]
+        base_vel = scope["qvel_start"]
         actuator_force = np.asarray(self.data.actuator_force, dtype=np.float64)
         return {
             "qpos": np.asarray(self.data.qpos, dtype=np.float64).tolist(),
@@ -539,10 +670,52 @@ class MujocoPhysics:
                 self.data.qvel[qvel_offset : qvel_offset + dimension],
                 dtype=np.float64,
             ).tolist(),
-            "joint_torque": actuator_force[:dimension].tolist(),
-            "base_position": np.asarray(self.data.qpos[:3], dtype=np.float64).tolist(),
-            "base_quaternion": np.asarray(self.data.qpos[3:7], dtype=np.float64).tolist(),
-            "base_velocity": np.asarray(self.data.qvel[:6], dtype=np.float64).tolist(),
+            "joint_torque": actuator_force[actuator_start : actuator_start + dimension].tolist(),
+            "base_position": np.asarray(
+                self.data.qpos[base : base + 3], dtype=np.float64
+            ).tolist(),
+            "base_quaternion": np.asarray(
+                self.data.qpos[base + 3 : base + 7], dtype=np.float64
+            ).tolist(),
+            "base_velocity": np.asarray(
+                self.data.qvel[base_vel : base_vel + 6], dtype=np.float64
+            ).tolist(),
+        }
+
+    def robot_scope(self, robot_id):
+        """The robot's composed-model scope (qpos/qvel/ctrl start + prefix)."""
+        self._robot_resource(robot_id)
+        scope = self._scopes.get(str(robot_id))
+        if scope is None:
+            raise ValueError(f'[botlab] MuJoCo scope for robot "{robot_id}" is unavailable')
+        return scope
+
+    def base_pose(self, robot_id):
+        """(position, quaternion) of the robot's free root, from its scope."""
+        scope = self.robot_scope(robot_id)
+        start = scope["qpos_start"]
+        qpos = self.data.qpos
+        return (
+            [float(qpos[start]), float(qpos[start + 1]), float(qpos[start + 2])],
+            [
+                float(qpos[start + 3]), float(qpos[start + 4]),
+                float(qpos[start + 5]), float(qpos[start + 6]),
+            ],
+        )
+
+    def robot_layout(self, robot_id):
+        """Scope-resolved control layout for host-side payload composition."""
+        resource, dimension, abs_qpos, abs_qvel, scope = self._robot_layout(robot_id)
+        config = resource.get("config") or {}
+        return {
+            "dimension": dimension,
+            "qpos_offset": abs_qpos,
+            "qvel_offset": abs_qvel,
+            "actuator_start": scope["actuator_start"],
+            "qpos_start": scope["qpos_start"],
+            "qvel_start": scope["qvel_start"],
+            "name_prefix": scope["name_prefix"],
+            "ctrl_order": config.get("actuatorJointOrder"),
         }
 
     def sensor_observation(self, sensor_id, channel=None):
@@ -573,8 +746,8 @@ class MujocoPhysics:
         return snapshot
 
     def apply_action(self, robot_id, action):
-        resource, dimension, qpos_offset, qvel_offset = self._robot_layout(robot_id)
-        if self._pending_ctrl is not None or self._pending_pd is not None:
+        resource, dimension, qpos_offset, qvel_offset, scope = self._robot_layout(robot_id)
+        if str(robot_id) in self._pending:
             raise RuntimeError(
                 f'[botlab] Controller.step must produce exactly one action for robot "{robot_id}"'
             )
@@ -602,16 +775,18 @@ class MujocoPhysics:
                     "[botlab] position-pd.effort_limit values must be positive"
                 )
             indices = np.arange(dimension, dtype=np.int64)
-            self._pending_pd = {
+            # 机器人局部索引；compose_payloads 在 step 时统一平移到组合模型的
+            # 绝对下标（scope + preset offset）。
+            self._pending[str(robot_id)] = ("pd", {
                 "target": values["target"],
                 "kps": values["kps"],
                 "kds": values["kds"],
                 "effort_min": -values["effort"],
                 "effort_max": values["effort"],
-                "qpos_indices": qpos_offset + indices,
-                "qvel_indices": qvel_offset + indices,
+                "qpos_indices": indices,
+                "qvel_indices": indices,
                 "ctrl_indices": self._actuator_joint_order(resource, dimension),
-            }
+            })
             return
 
         vector = np.asarray(action, dtype=np.float64)
@@ -622,9 +797,7 @@ class MujocoPhysics:
         if not np.all(np.isfinite(vector)):
             bad = int(np.flatnonzero(~np.isfinite(vector))[0])
             raise ValueError(f"[botlab] ctrl action[{bad}] must be finite")
-        full_ctrl = np.asarray(self.data.ctrl, dtype=np.float64).copy()
-        full_ctrl[:dimension] = vector
-        self._pending_ctrl = full_ctrl
+        self._pending[str(robot_id)] = ("ctrl", vector)
 
     def request_reset(self, reason, spec=None):
         del reason
@@ -639,8 +812,13 @@ class MujocoPhysics:
         robot_id = spec.get("robotId")
         if robot_id is None:
             robot_id = self._robot["id"] if self._robot is not None else None
-        _resource, dimension, qpos_offset, qvel_offset = self._robot_layout(robot_id)
-        if (qpos_offset, qvel_offset) not in ((7, 6), (0, 0)):
+        resource, dimension, _abs_qpos, _abs_qvel, scope = self._robot_layout(robot_id)
+        local_config = resource.get("config") or {}
+        local_offsets = (
+            local_config.get("jointQposOffset"),
+            local_config.get("jointQvelOffset"),
+        )
+        if local_offsets not in ((7, 6), (0, 0)):
             raise ValueError(
                 f"[botlab] reset_to() requires {robot_id}.jointQposOffset/"
                 "jointQvelOffset of 7/6 (floating root) or 0/0 (fixed base)"
@@ -683,16 +861,35 @@ class MujocoPhysics:
                 f"[botlab] reset_to() joint_indices must map all {dimension} robot joints"
             )
         qpos, qvel = self._motion_initial_state(
-            motion, frame, root_body, joint_indices, qpos_offset == 7
+            motion, frame, root_body, joint_indices, local_offsets[0] == 7
         )
+        if len(self._robots) > 1:
+            # 组合模型：把该机器人的局部向量拼接进它的 scope 切片，其余机器人
+            # 保持初始快照。
+            full_qpos = self._initial_qpos.copy()
+            full_qvel = self._initial_qvel.copy()
+            qpos_start = scope["qpos_start"]
+            qvel_start = scope["qvel_start"]
+            if qpos_start + len(qpos) > len(full_qpos):
+                raise ValueError(
+                    f"[botlab] reset_to() produced {len(qpos)} qpos values outside "
+                    f'robot "{robot_id}" scope in the composed model'
+                )
+            if qvel_start + len(qvel) > len(full_qvel):
+                raise ValueError(
+                    f"[botlab] reset_to() produced {len(qvel)} qvel values outside "
+                    f'robot "{robot_id}" scope in the composed model'
+                )
+            full_qpos[qpos_start : qpos_start + len(qpos)] = qpos
+            full_qvel[qvel_start : qvel_start + len(qvel)] = qvel
+            qpos, qvel = full_qpos, full_qvel
         if len(qpos) != len(self.data.qpos) or len(qvel) != len(self.data.qvel):
             raise ValueError(
                 f"[botlab] reset_to() produced {len(qpos)}/{len(qvel)} state values but "
                 f"the local model expects {len(self.data.qpos)}/{len(self.data.qvel)}"
             )
         self._mujoco.mj_resetData(self.model, self.data)
-        self._pending_ctrl = None
-        self._pending_pd = None
+        self._pending = {}
         self._apply_initial_state(qpos, qvel)
         return frame / motion["fps"]
 
@@ -743,6 +940,10 @@ class MujocoPhysics:
         from ._observations import read_mujoco_access_query
 
         self._robot_resource(robot_id)
+        scope = self._scopes.get(str(robot_id)) or {}
+        context = {"model": self.model, "data": self.data}
+        if scope.get("name_prefix"):
+            context["namePrefix"] = scope["name_prefix"]
         config = {"query": query}
         if target is not None:
             config["target"] = target
@@ -750,9 +951,7 @@ class MujocoPhysics:
             config["start"] = start
         if length is not None:
             config["length"] = length
-        values = read_mujoco_access_query(
-            {"model": self.model, "data": self.data}, config
-        )
+        values = read_mujoco_access_query(context, config)
         return np.asarray(values, dtype=np.float64).tolist()
 
     def load_motion(self, motion_id):

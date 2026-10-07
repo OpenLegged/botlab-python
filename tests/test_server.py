@@ -27,7 +27,6 @@ from botlab._server import (
 
 class _QuietServer(socketserver.ThreadingTCPServer):
     allow_reuse_address = True
-    daemon_threads = True
 
 
 @contextmanager
@@ -50,6 +49,7 @@ def _running_server(project_dir: Path, tmp_path: Path):
     finally:
         server.shutdown()
         server.server_close()
+        thread.join(timeout=5.0)
 
 
 def test_local_project_payload_splits_sources_and_assets(project_dir: Path):
@@ -109,7 +109,8 @@ def test_project_urls_reject_escape(project_dir: Path, tmp_path: Path):
 def test_quiet_access_log(project_dir: Path, tmp_path: Path, capsys):
     with _running_server(project_dir, tmp_path) as base:
         with capsys.disabled():
-            urlopen(f"{base}/local-project.json")
+            with urlopen(f"{base}/local-project.json") as response:
+                response.read()
     captured = capsys.readouterr()
     assert captured.out == ""
     assert captured.err == ""
@@ -151,29 +152,3 @@ def test_serve_project_requires_exactly_one_release_source(project_dir: Path, tm
             project_dir, tmp_path / "a.zip", "127.0.0.1", 0,
             ui_dir=tmp_path, release_provider=lambda: b"",
         )
-
-
-def test_index_html_localization_strips_analytics_and_sets_flag():
-    from botlab._ui_sync import localize_index_html
-
-    html = (
-        "<html><head><title>t</title>\n"
-        '    <!-- Analytics: Umami -->\n'
-        '    <script defer src="https://buried-point.d-robotics.cc/script.js" '
-        'crossorigin="anonymous"></script>\n\n'
-        "    <!-- 百度自动推送：页面加载时自动提交 URL 到百度收录 -->\n"
-        "    <script>\n      (function () { })();\n    </script>\n"
-        "</head><body></body></html>"
-    )
-    out = localize_index_html(html)
-    assert "buried-point" not in out
-    assert "百度自动推送" not in out
-    assert "BOTLAB_LOCAL_PROJECT=true" in out
-    assert out.index("BOTLAB_LOCAL_PROJECT") < out.index("</head>")
-
-
-def test_index_html_localization_is_idempotent():
-    from botlab._ui_sync import localize_index_html
-
-    once = localize_index_html("<html><head></head><body></body></html>")
-    assert localize_index_html(once) == once

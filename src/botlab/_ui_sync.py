@@ -1,99 +1,121 @@
-"""Sync the BotLab UI snapshot from a BotLab build.
-
-``botlab run`` serves the full BotLab site out of one snapshot: the editor
-(``index.html``, the default debug surface with the complete IDE — console,
-watch, metrics) plus the embed runtime (``embed.html``) for packaged releases.
-The snapshot copies the runtime closure from ``dist/`` but deliberately omits
-``d/`` demo apps and the top-level ``templates/`` / ``models/`` catalogs.
-Local projects provide their own assets through ``/project/``; bundling every
-example policy and robot model in the Python wheel would make the core package
-hundreds of megabytes larger. The target is recreated on every sync so stale
-chunks from older builds never survive.
-
-One deliberate local-only edit: the analytics snippets in ``index.html``
-(Umami + Baidu push) are stripped — they would neither load nor report under
-the debug server's cross-origin isolation headers, and localhost hits are
-junk data anyway — and a ``window.BOTLAB_LOCAL_PROJECT`` flag is injected so
-the editor at ``/`` boots straight into the local project with a bare URL.
-"""
+"""Copy the pure Three.js native display into the small default wheel."""
 
 from __future__ import annotations
 
 import re
 import shutil
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from ._host import BotLabError
 
-# Demo apps and built-in catalog assets have their own distribution story. The
-# CLI hosts the editor/runtime while the active project's assets are served
-# from its directory at /project/.
-_SNAPSHOT_EXCLUDED_TOP_DIRS = {"d", "models", "templates"}
-
-# Analytics blocks in the built index.html, anchored on their stable HTML
-# comments. Missing markers (a future index.html) leave the file untouched.
+_HTML_REFERENCE = re.compile(r'''(?:src|href)=["']([^"']+)["']''')
+_ASSET_REFERENCE = re.compile(r'''["'`]([^"'`\s]{2,240})["'`]''')
+_CSS_URL = re.compile(r"url\(\s*['\"]?([^)'\"\s]+)")
+_FORBIDDEN = re.compile(r"(?:\.wasm\b|WebAssembly|ort-wasm|pyodide|@mujoco/mujoco)", re.I)
+_HEAVY_PATH = re.compile(r"(?:^|/)(?:wasm|pyodide|netron|monaco|ort(?:-|\.|/)|onnxruntime)", re.I)
 _ANALYTICS_BLOCK = re.compile(
     r"[ \t]*<!-- Analytics: Umami -->[^\n]*\n[ \t]*<script[^>]*></script>\n?"
     r"|[ \t]*<!-- 百度自动推送[^\n]*-->\n[ \t]*<script>.*?</script>\n?",
     re.S,
 )
 
-# Marks this site copy as the `botlab run` debug surface: the editor boots
-# straight into the local project instead of the template catalog.
-_LOCAL_FLAG_SCRIPT = '<script>window.BOTLAB_LOCAL_PROJECT=true</script>'
-
-
-def strip_local_analytics(html: str) -> str:
-    return _ANALYTICS_BLOCK.sub("", html)
-
-
-def add_local_project_flag(html: str) -> str:
-    if "BOTLAB_LOCAL_PROJECT" in html:
-        return html
-    return html.replace("</head>", f"{_LOCAL_FLAG_SCRIPT}</head>", 1)
-
 
 def localize_index_html(html: str) -> str:
-    return add_local_project_flag(strip_local_analytics(html))
+    """Keep the full editor's local-project mode when exported separately."""
+    html = _ANALYTICS_BLOCK.sub("", html)
+    if "BOTLAB_LOCAL_PROJECT" not in html:
+        html = html.replace("</head>", "<script>window.BOTLAB_LOCAL_PROJECT=true</script></head>", 1)
+    return html
 
 
-def _collect_source_files(dist: Path) -> list[Path]:
-    files: list[Path] = []
-    pending = [dist]
+def _resolve_reference(raw: str, current: str, available: set[str]) -> str | None:
+    if (raw.startswith(("#", "//", "data:")) or
+        re.match(r"^[A-Za-z][A-Za-z0-9+.-]*:", raw)):
+        return None
+    path = raw.split("?", 1)[0].split("#", 1)[0]
+    if not path:
+        return None
+    parts = [] if path.startswith("/") else list(PurePosixPath(current).parent.parts)
+    for part in path.lstrip("/").split("/"):
+        if part in ("", "."):
+            continue
+        if part == "..":
+            if not parts:
+                return None
+            parts.pop()
+        else:
+            parts.append(part)
+    candidate = "/".join(parts)
+    return candidate if candidate in available else None
+
+
+def _viewer_closure(dist: Path) -> list[str]:
+    if not (dist / "viewer.html").is_file():
+        raise BotLabError(
+            f"{dist} is missing viewer.html. Run the BotLab viewer build first."
+        )
+    available = {
+        path.relative_to(dist).as_posix()
+        for path in dist.rglob("*") if path.is_file()
+    }
+    if any(_HEAVY_PATH.search(name) or ".wasm" in name.lower() for name in available):
+        raise BotLabError("Viewer build contains WASM; only the pure Three.js display can enter the wheel.")
+    seen: set[str] = set()
+    pending = ["viewer.html"]
     while pending:
-        for child in pending.pop().iterdir():
-            if child.is_dir():
-                if child.parent == dist and child.name in _SNAPSHOT_EXCLUDED_TOP_DIRS:
-                    continue
-                pending.append(child)
-                continue
-            if child.is_file():
-                files.append(child)
+        name = pending.pop()
+        if name in seen:
+            continue
+        source = dist / name
+        if source.is_symlink():
+            raise BotLabError(f"Viewer build contains a symlink: {source}")
+        seen.add(name)
+        if source.suffix not in {".html", ".js", ".mjs", ".css"}:
+            continue
+        content = source.read_text(encoding="utf-8")
+        if _FORBIDDEN.search(content):
+            raise BotLabError(f"Viewer build references browser simulation runtime or WASM: {name}")
+        refs = (_HTML_REFERENCE,) if source.suffix == ".html" else (
+            (_CSS_URL,) if source.suffix == ".css" else (_ASSET_REFERENCE,)
+        )
+        for pattern in refs:
+            for match in pattern.finditer(content):
+                reference = _resolve_reference(match.group(1), name, available)
+                if reference and reference not in seen:
+                    pending.append(reference)
+    return sorted(seen)
+
+
+def validate_viewer_snapshot(path: Path) -> list[str]:
+    """Validate a wheel input, including stale files from an old full snapshot."""
+    if not (path / "index.html").is_file() or not (path / "embed.html").is_file():
+        raise BotLabError(f"Viewer snapshot lacks index.html or embed.html under {path}.")
+    files = [item.relative_to(path).as_posix() for item in path.rglob("*") if item.is_file()]
+    if any(_HEAVY_PATH.search(name) or ".wasm" in name.lower() for name in files):
+        raise BotLabError("Viewer snapshot contains WASM; rerun `botlab ui sync`.")
+    for name in files:
+        item = path / name
+        if item.is_symlink():
+            raise BotLabError(f"Viewer snapshot contains a symlink: {name}")
+        if item.suffix in {".html", ".js", ".mjs", ".css"} and _FORBIDDEN.search(item.read_text(encoding="utf-8")):
+            raise BotLabError(f"Viewer snapshot references browser simulation runtime: {name}")
     return files
 
 
 def sync_ui_snapshot(botlab_dir: Path, target_dir: Path) -> int:
-    dist = botlab_dir / "dist"
-    if not (dist / "index.html").is_file() or not (dist / "embed.html").is_file():
-        raise BotLabError(
-            f"{dist} is missing index.html / embed.html. Run `npm run build` in the "
-            f"BotLab checkout first ({botlab_dir})."
-        )
-
-    sources = _collect_source_files(dist)
+    dist = botlab_dir / "dist-viewer"
+    closure = _viewer_closure(dist)
     if target_dir.exists():
         shutil.rmtree(target_dir)
     target_dir.mkdir(parents=True)
-
-    copied = 0
-    for source in sources:
-        destination = target_dir / source.relative_to(dist)
+    for name in closure:
+        source = dist / name
+        destination = target_dir / name
         destination.parent.mkdir(parents=True, exist_ok=True)
-        if source.name == "index.html" and source.parent == dist:
-            destination.write_text(
-                localize_index_html(source.read_text(encoding="utf-8")), encoding="utf-8"
-            )
-        else:
-            shutil.copy2(source, destination)
-        copied += 1
-    return copied
+        shutil.copy2(source, destination)
+    html = (target_dir / "viewer.html").read_bytes()
+    (target_dir / "index.html").write_bytes(html)
+    (target_dir / "embed.html").write_bytes(html)
+    (target_dir / "viewer.html").unlink()
+    validate_viewer_snapshot(target_dir)
+    return len(closure) + 1

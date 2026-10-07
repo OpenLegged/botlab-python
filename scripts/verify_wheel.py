@@ -76,14 +76,13 @@ assert not direct.get("dir_info", {}).get("editable"), direct
 assert direct["url"] == Path(sys.argv[1]).as_uri(), direct
 assert "archive_info" in direct, direct
 scripts = {item.name: item.value for item in dist.entry_points if item.group == "console_scripts"}
-assert scripts["botlab"] == "botlab._cli:main", scripts
-assert scripts["botlab-run"] == "botlab.sdk._runtime.run:main", scripts
+assert scripts == {"botlab": "botlab._cli:main"}, scripts
 for name in ("component-reference.md", "decision-table.md", "error-guide.md"):
     assert (root / "docs" / name).is_file(), name
+assert not any(root.rglob("*.wasm*")), "core wheel contains a WASM runtime"
 if sys.argv[2] == "release":
     for name in ("index.html", "embed.html"):
         assert (root / "ui" / name).is_file(), name
-    assert any((root / "ui").rglob("*.wasm")), "UI has no WASM runtime"
 else:
     assert not (root / "ui").exists(), "source-wheel check expects no UI"
 print(json.dumps({"package": str(root), "version": dist.version,
@@ -95,14 +94,14 @@ def verify_archive(wheel: Path, *, source_wheel: bool) -> None:
     with zipfile.ZipFile(wheel) as archive:
         names = set(archive.namelist())
         required = {f"botlab/docs/{name}" for name in DOCS}
-        required.update({"botlab/_cli.py", "botlab/sdk/_runtime/run.py"})
+        required.update({"botlab/_cli.py", "botlab/_runtime/run.py"})
+        if any(".wasm" in name for name in names):
+            raise ValueError("core wheel must not contain WASM runtimes (including compressed copies)")
         if source_wheel:
             if any(name.startswith("botlab/ui/") for name in names):
                 raise ValueError("--source-wheel expects a CI wheel without the UI snapshot")
         else:
             required.update({"botlab/ui/index.html", "botlab/ui/embed.html"})
-            if not any(name.startswith("botlab/ui/") and name.endswith(".wasm") for name in names):
-                raise ValueError("release wheel is missing the real WASM UI runtime")
         missing = required - names
         if missing:
             raise ValueError(f"wheel is missing required files: {', '.join(sorted(missing))}")
@@ -113,6 +112,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("wheel", type=Path)
     parser.add_argument("--out", required=True, type=Path, help="new directory for evidence and venv")
     parser.add_argument("--source-wheel", action="store_true", help="CI contract only: no UI/site")
+    parser.add_argument("--browser-runtime", type=Path,
+                        help="separate version-matched runtime archive for offline site acceptance")
     args = parser.parse_args(argv)
     wheel, out = args.wheel.resolve(), args.out.resolve()
     if not wheel.is_file() or wheel.suffix != ".whl":
@@ -124,16 +125,23 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("uv must be installed and available on PATH")
     verify_archive(wheel, source_wheel=args.source_wheel)
     digest = hashlib.sha256(wheel.read_bytes()).hexdigest()
+    runtime = args.browser_runtime.resolve() if args.browser_runtime else None
+    if runtime is not None and not runtime.is_file():
+        parser.error("--browser-runtime must be an existing archive")
+    runtime_digest = hashlib.sha256(runtime.read_bytes()).hexdigest() if runtime else None
     out.mkdir(parents=True)
     (out / "tmp").mkdir()
     env = {
         key: value for key, value in os.environ.items()
         if key not in {"PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV"} and not key.startswith("BOTLAB_")
     }
-    env.update({"PYTHONNOUSERSITE": "1", "TMPDIR": str(out / "tmp")})
+    env.update({"PYTHONNOUSERSITE": "1", "TMPDIR": str(out / "tmp"),
+                "BOTLAB_RUNTIME_CACHE_DIR": str(out / "browser-cache")})
     commands = []
     report = {"wheel": str(wheel), "sha256": digest, "mode": "source" if args.source_wheel
               else "release", "commands": commands, "browser_verified": False}
+    if runtime is not None:
+        report["browser_runtime"] = {"archive": str(runtime), "sha256": runtime_digest}
 
     def run(label: str, command: list[str], *, extra_env: dict[str, str] | None = None) -> str:
         print(f"[{label}] {' '.join(command)}", flush=True)
@@ -154,7 +162,6 @@ def main(argv: list[str] | None = None) -> int:
         bin_dir = venv / ("Scripts" if os.name == "nt" else "bin")
         python = bin_dir / ("python.exe" if os.name == "nt" else "python")
         cli = bin_dir / ("botlab.exe" if os.name == "nt" else "botlab")
-        native = bin_dir / ("botlab-run.exe" if os.name == "nt" else "botlab-run")
         run("install", [uv, "pip", "install", "--python", str(python), f"{wheel}[runtime]"])
         run("installed", [str(python), "-I", "-c", CHECK_INSTALL, str(wheel), report["mode"]])
         run("version", [str(cli), "--version"])
@@ -171,13 +178,20 @@ def main(argv: list[str] | None = None) -> int:
             (project / name).write_text(content, encoding="utf-8")
         run("validate", [str(cli), "validate", str(project)])
         steps_env = {"BOTLAB_STEPS": "30"}
-        native_output = run("native", [str(native), str(project)], extra_env=steps_env)
+        native_output = run("native", [str(cli), "run", str(project), "--headless"],
+                            extra_env=steps_env)
         if "completed 30 control steps" not in native_output:
             raise RuntimeError("native MuJoCo run did not report all requested steps")
         run("build", [str(cli), "build", str(project), "--out", str(out / "release.zip")])
+        if (out / "browser-cache").exists():
+            raise RuntimeError("compilation or native execution acquired a browser runtime")
         if not args.source_wheel:
             run("native-viewer", [str(cli), "run", str(project), "--no-browser",
                                   "--host", "127.0.0.1", "--port", "0"], extra_env=steps_env)
+            if (out / "browser-cache").exists():
+                raise RuntimeError("the native viewer acquired a browser runtime")
+            if runtime is not None:
+                run("runtime-import", [str(cli), "ui", "fetch", "--archive", str(runtime)])
             site = out / "site"
             run("site", [str(cli), "build", str(project), "--site", str(site)])
             if not (site / "index.html").is_file() or not any(site.rglob("*.wasm")):
@@ -185,6 +199,8 @@ def main(argv: list[str] | None = None) -> int:
             report["site"] = str(site)
         if hashlib.sha256(wheel.read_bytes()).hexdigest() != digest:
             raise RuntimeError("input wheel changed during acceptance")
+        if runtime is not None and hashlib.sha256(runtime.read_bytes()).hexdigest() != runtime_digest:
+            raise RuntimeError("input browser runtime changed during acceptance")
         report["exit_code"] = 0
         print("PASS: " + ("source wheel contract (no UI/site; not a release gate)"
                           if args.source_wheel else "candidate wheel; browser acceptance still required"))

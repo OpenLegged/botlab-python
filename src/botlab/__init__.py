@@ -6,11 +6,10 @@ signal expressions, and let :mod:`botlab` package and run it in the browser
 BotLab simulation runtime.
 
 The SDK implementation lives in the ``sdk/`` subpackage — a verbatim mirror of
-the ``botlab`` package BotLab serves in the browser, re-synced with
-``scripts/sync_sdk.py`` — so a project runs the same way offline and online.
-The mirror also carries the native headless runtime (``sdk/_runtime/``,
-``botlab-run``); the host that collects declarations and bridges that runtime
-lives in ``_host.py``.
+the flat Python modules BotLab serves in the browser, re-synced with
+``scripts/sync_sdk.py``. The native runtime behind ``botlab run`` is maintained
+here in ``botlab._runtime``; the host that collects declarations and bridges
+that runtime lives in ``_host.py``.
 """
 
 import sys
