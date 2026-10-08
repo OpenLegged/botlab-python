@@ -24,6 +24,8 @@ from botlab._release import _is_npz_motion_source, create_release_package
 from botlab.sdk._runtime._motion import MOTION_REQUIRED_FILES, load_motion_npz
 from tests.conftest import write_motion_npz
 
+IDENTITY_ONNX = (Path(__file__).parent / "assets" / "identity.onnx").read_bytes()
+
 MOTION_CONTROLLER = '''
 from botlab import Model, Motion, PolicyController, Robot, concat, project
 
@@ -56,7 +58,7 @@ def _motion_project(tmp_path: Path, source: str) -> Path:
     (robot_dir / "scene.xml").write_text("<mujoco/>", encoding="utf-8")
     model_dir = tmp_path / "assets" / "models"
     model_dir.mkdir(parents=True)
-    (model_dir / "policy.onnx").write_bytes(b"fake-onnx-bytes")
+    (model_dir / "policy.onnx").write_bytes(IDENTITY_ONNX)
     return tmp_path
 
 

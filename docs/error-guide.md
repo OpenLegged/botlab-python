@@ -19,7 +19,10 @@ CLI 的错误全部是硬失败：缺什么、哪条契约破了、字段名是�
 | `Parameter "x" has unknown field` | 参数声明带未知键 | 参数只有 label/default/range/step/unit |
 | `default is outside its range` | 参数默认值出界 | 修 default 或 range |
 | `does not exist in the project` | 资源 source 指向不存在的文件 | 核对工程内相对路径 |
-| `must be a URL or a safe project-relative path` | source 带 `..`、绝对路径或反斜杠 | 改为工程相对路径或 URL |
+| `Motions package either as a single .npz archive …` | motion 按 .bin 文件夹打包但缺文件 | 动作源要么以 `.npz` 结尾（单文件归档），要么是含全部 7 个 `.bin` 的文件夹；报错里列出缺哪些 |
+| `not a valid ONNX model` | model 资产字节解析失败（装了 `onnx` 包才检查） | 重新导出模型；见 `docs/onnx-export.md` |
+| `stores weights in external file(s)` | torch 2.x dynamo 导出把权重放进了旁边的 `.data` 文件 | 用 `convert_model_from_external_data` 内联回单文件；见 `docs/onnx-export.md` |
+| `call declares input_name/output_name … but the model … are […]` | 声明的图输入/输出名与 ONNX 图不符 | 导出时 `input_names=["obs"], output_names=["action"]`，或改声明与图一致 |
 | `main.py did not register a controller` | create_controller 没返回 PolicyController | 检查返回值与四行 main |
 | `control plan needs exactly one Signal.action()` | 0 个或 ≥2 个 action 标记 | 全计划恰好一个 `.action()` |
 | `requires unsupported node type` | plan 里有引擎白名单外节点 | SDK 版本与 BotLab 构造版本不匹配，重同步 UI/SDK |

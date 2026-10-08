@@ -48,6 +48,9 @@ dev = [
   "pytest>=8.0",
   "ruff>=0.6",
   "botlab-python[runtime]",
+  # Enables the packaging-time ONNX asset validation in dev/CI; without it
+  # botlab build packages model bytes as-is.
+  "onnx>=1.16",
 ]
 
 [tool.hatch.build.targets.wheel]
