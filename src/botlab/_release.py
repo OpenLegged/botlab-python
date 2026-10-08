@@ -84,6 +84,17 @@ def _should_package(resource: dict) -> bool:
     return False
 
 
+def _is_npz_motion_source(source: str) -> bool:
+    """Mirror the engine's isNpzMotionSource: motion archives package as one
+    asset; everything else is the seven-file .bin folder layout."""
+    if source.startswith("registry://"):
+        path = source[len("registry://"):]
+    else:
+        path = source
+    path = path.split("?", 1)[0].split("#", 1)[0]
+    return path.rstrip("/").lower().endswith(".npz")
+
+
 def _pack_resource(project_dir: Path, resource: dict, used: set[str]) -> list[dict]:
     """Read one resource's bytes from the project directory.
 
@@ -107,13 +118,36 @@ def _pack_resource(project_dir: Path, resource: dict, used: set[str]) -> list[di
         return path.read_bytes()
 
     if role == "motion":
-        base = resource["source"].rstrip("/")
-        for name in MOTION_REQUIRED_FILES:
-            data = read_file(f"{base}/{name}")
+        if _is_npz_motion_source(resource["source"]):
+            # Single-file NPZ motions travel as one asset; the embed runtime
+            # re-registers them under a "<prefix>.npz" registry entry and keeps
+            # their dof/body names, which the .bin folder layout drops.
+            data = read_file(resource["source"])
+            name = _source_file_name(resource, role)
             entries.append({
                 "resourceId": resource["id"],
                 "path": _asset_path(role, resource["id"], name, used),
                 "name": name,
+                "mimeType": "application/octet-stream",
+                "role": role,
+                "integrity": _sha256_integrity(data),
+                "_buffer": data,
+            })
+            return entries
+        base = resource["source"].rstrip("/")
+        for required in MOTION_REQUIRED_FILES:
+            try:
+                data = read_file(f"{base}/{required}")
+            except BotLabError as error:
+                raise BotLabError(
+                    f"{error} Motions package either as a single .npz archive "
+                    "(source ending in .npz) or as a folder with the required "
+                    f".bin files: {', '.join(MOTION_REQUIRED_FILES)}."
+                ) from error
+            entries.append({
+                "resourceId": resource["id"],
+                "path": _asset_path(role, resource["id"], required, used),
+                "name": required,
                 "mimeType": "application/octet-stream",
                 "role": role,
                 "integrity": _sha256_integrity(data),
