@@ -185,6 +185,7 @@ class HostSession:
         self._resources: list[dict] = []
         self._resource_ids: set[str] = set()
         self._parameters: dict[str, dict] = {}
+        self._parameter_overrides: dict[str, float] = {}
         self._project_name: str | None = None
         self._control_hz: int | None = None
         self._physics_hz: int | None = None
@@ -335,10 +336,32 @@ class HostSession:
         raise BotLabError(f"[botlab] {rid}.{field} must contain {dimension} finite numbers")
 
     def parameter(self, name):
+        # Overrides win over declared defaults: the runtime queries this every
+        # control step, so an override applied between steps takes effect on
+        # the next one — the headless counterpart of dragging a slider live.
+        if name in self._parameter_overrides:
+            return self._parameter_overrides[name]
         parameter = self._parameters.get(name)
         if parameter is None:
             return None
         return parameter.get("default")
+
+    def set_parameter(self, pid, value):
+        """Override a declared parameter's value, range-checked like the
+        declaration. Parameters only; undeclared ids and out-of-range values
+        are rejected the same way ``project()`` rejects them."""
+        parameter = self._parameters.get(pid)
+        if parameter is None:
+            known = ", ".join(sorted(self._parameters)) or "(none declared)"
+            raise BotLabError(
+                f"[botlab] Parameter {pid!r} is not declared by this project: {known}"
+            )
+        value = _finite_number(value, f"Parameter {pid!r} value")
+        low = parameter.get("min")
+        high = parameter.get("max")
+        if (low is not None and value < low) or (high is not None and value > high):
+            raise BotLabError(f"[botlab] Parameter {pid!r} value is outside its range")
+        self._parameter_overrides[pid] = value
 
     def parameter_range(self, name):
         parameter = self._parameters.get(name)
@@ -495,6 +518,17 @@ class _ProjectStateView:
         if kind is not None and item["kind"] != str(kind):
             raise BotLabError(f'[botlab] resource "{rid}" is {item["kind"]}, expected {kind}')
         return item
+
+    def set_parameter(self, name, value):
+        """Override a declared parameter (headless parameter "slider").
+
+        The runtime re-queries parameters every control step, so calling this
+        between steps of a rollout changes the simulation from the next step
+        on — the same live effect a key press or slider drag has in the
+        browser. The declared default is untouched; a fresh ``reset`` clears
+        overrides along with the declarations.
+        """
+        self._session().set_parameter(str(name), value)
 
 
 _project_state = _ProjectStateView()
