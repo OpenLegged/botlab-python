@@ -142,3 +142,38 @@ def test_reset_replaces_previous_declarations(clean_state, tmp_path):
     state.reset(str(tmp_path))
     with pytest.raises(BotLabError, match="Unknown resource"):
         state.resource("Robot")
+
+
+def test_set_parameter_overrides_the_declared_default(clean_state, tmp_path):
+    state = _host.project_state()
+    state.reset(str(tmp_path))
+    _host.declareResource("robot", "Robot", "assets/robot/scene.xml", None, None, ROBOT_CONFIG)
+    _host.declareProject("Native Duck", 50, 200, {"speed": {"default": 0.4, "range": [0, 1]}})
+
+    # The runtime query (used by _fill_parameters every control step) sees the
+    # override; the declared default in the manifest stays untouched.
+    assert _host.parameter("speed") == 0.4
+    state.set_parameter("speed", 0.9)
+    assert _host.parameter("speed") == 0.9
+    assert state.manifest()["parameters"]["speed"]["default"] == 0.4
+
+
+def test_set_parameter_validates_like_the_declaration(clean_state, tmp_path):
+    state = _host.project_state()
+    state.reset(str(tmp_path))
+    _host.declareResource("robot", "Robot", "assets/robot/scene.xml", None, None, ROBOT_CONFIG)
+    _host.declareProject("Native Duck", 50, 200, {"speed": {"default": 0.4, "range": [0, 1]}})
+
+    with pytest.raises(BotLabError, match="not declared"):
+        state.set_parameter("heading", 0.5)
+    with pytest.raises(BotLabError, match="outside its range"):
+        state.set_parameter("speed", 2.0)
+    with pytest.raises(BotLabError, match="finite number"):
+        state.set_parameter("speed", float("nan"))
+    assert _host.parameter("speed") == 0.4
+
+
+def test_set_parameter_without_declarations_raises(clean_state):
+    _host.project_state().reset(None)
+    with pytest.raises(BotLabError, match="reset\\(directory\\) first"):
+        _host.project_state().set_parameter("speed", 0.5)
