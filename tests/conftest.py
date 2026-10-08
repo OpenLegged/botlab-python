@@ -56,7 +56,11 @@ def project_dir(tmp_path: Path) -> Path:
     (robot_dir / "scene.xml").write_text("<mujoco/>", encoding="utf-8")
     model_dir = tmp_path / "assets" / "models"
     model_dir.mkdir(parents=True)
-    (model_dir / "policy.onnx").write_bytes(b"fake-onnx-bytes")
+    # A real (tiny) ONNX model: packaging-time validation parses model assets
+    # whenever the onnx package is installed, and fake bytes would fail it.
+    (model_dir / "policy.onnx").write_bytes(
+        (Path(__file__).parent / "assets" / "identity.onnx").read_bytes()
+    )
     return tmp_path
 
 

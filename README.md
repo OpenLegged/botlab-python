@@ -186,7 +186,9 @@ existing clients.
   mistakes.
 - [Error guide](https://github.com/OpenLegged/botlab-python/blob/main/docs/error-guide.md)
   — error messages, causes, and fixes.
-- The same three documents ship inside the wheel as `botlab/docs/`, so local AI
+- [ONNX export guide](https://github.com/OpenLegged/botlab-python/blob/main/docs/onnx-export.md)
+  — exporting policy networks to the single-file ONNX the browser runtime loads.
+- The same documents ship inside the wheel as `botlab/docs/`, so local AI
   coding agents can read them straight after `pip install`; `botlab docs`
   prints where they are.
 - The BotLab repository's `docs/api/` and `docs/examples/` directories contain

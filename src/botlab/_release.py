@@ -210,6 +210,7 @@ def create_release_package(
     packed: list[dict] = []
     for resource in project.manifest["resources"]:
         packed.extend(_pack_resource(project.project_dir, resource, used_paths))
+    _validate_onnx_assets(packed, compiled)
     total_declared = sum(entry["integrity"]["byteLength"] for entry in packed)
     if total_declared > MAX_PYTHON_RELEASE_PACKAGE_BYTES:
         raise BotLabError(
@@ -275,3 +276,89 @@ def _release_timestamp() -> str:
     from datetime import datetime, timezone
 
     return datetime.now(timezone.utc).isoformat()
+
+
+def _optional_onnx_module():
+    """The onnx package when installed; validation degrades to a no-op without
+    it (packaging itself only needs the model's bytes)."""
+    try:
+        import onnx
+    except ImportError:
+        return None
+    return onnx
+
+
+def _validate_onnx_model(onnx, data: bytes, resource_id: str, calls: list[dict]) -> None:
+    label = f'model resource "{resource_id}"'
+    try:
+        model = onnx.load_model_from_string(data)
+    except Exception as error:
+        raise BotLabError(
+            f"[botlab] {label} is not a valid ONNX model ({error}). "
+            "Export a single ONNX file from your training framework."
+        ) from error
+
+    # A model whose weights live in a sibling file loads fine wherever it was
+    # exported but breaks every runtime that reads the packaged bytes alone.
+    from onnx import external_data_helper
+
+    external = [
+        next(
+            (item.value for item in tensor.external_data if item.key == "location"),
+            tensor.name,
+        )
+        for tensor in model.graph.initializer
+        if external_data_helper.uses_external_data(tensor)
+    ]
+    if external:
+        raise BotLabError(
+            f"[botlab] {label} stores weights in external file(s) "
+            f"({', '.join(sorted(set(external)))}); the release ships only the "
+            "model itself. Inline them before packaging, e.g.\n"
+            "  model = onnx.load(path, load_external_data=False)\n"
+            "  onnx.external_data_helper.convert_model_from_external_data(model)\n"
+            "  onnx.save(model, path)"
+        )
+
+    if not calls:
+        return
+    input_names = [item.name for item in model.graph.input]
+    output_names = [item.name for item in model.graph.output]
+    for call in calls:
+        declared_input = call.get("inputName")
+        if declared_input is not None and declared_input not in input_names:
+            raise BotLabError(
+                f'[botlab] {label} call declares input_name "{declared_input}" but the '
+                f'model inputs are {input_names}. Pass input_name matching the graph.'
+            )
+        declared_output = call.get("outputName")
+        if declared_output is not None and declared_output not in output_names:
+            raise BotLabError(
+                f'[botlab] {label} call declares output_name "{declared_output}" but the '
+                f'model outputs are {output_names}. Pass output_name matching the graph.'
+            )
+
+
+def _validate_onnx_assets(packed: list[dict], compiled: dict | None) -> None:
+    """Deep-check packaged models when the onnx package is available.
+
+    Faults caught here (unparseable files, externalized weights, graph/graph
+    name mismatches) otherwise surface deep inside the browser runtime where
+    they are much harder to attribute back to the asset.
+    """
+    onnx = _optional_onnx_module()
+    if onnx is None:
+        return
+    calls: dict[str, list[dict]] = {}
+    if compiled is not None:
+        for node in compiled.get("plan", {}).get("nodes", []):
+            if isinstance(node, dict) and node.get("type") == "model-onnx":
+                data = node.get("data") or {}
+                resource_id = data.get("resourceId")
+                if isinstance(resource_id, str):
+                    calls.setdefault(resource_id, []).append(data)
+    for entry in packed:
+        if entry["role"] == "model":
+            _validate_onnx_model(
+                onnx, entry["_buffer"], entry["resourceId"], calls.get(entry["resourceId"], [])
+            )

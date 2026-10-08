@@ -17,7 +17,12 @@ from hatchling.builders.hooks.plugin.interface import BuildHookInterface
 
 _UI_SNAPSHOT = ("src/botlab/ui", "botlab/ui")
 _DOCS = ("docs", "botlab/docs")
-_REQUIRED_DOCS = ("component-reference.md", "decision-table.md", "error-guide.md")
+_REQUIRED_DOCS = (
+    "component-reference.md",
+    "decision-table.md",
+    "error-guide.md",
+    "onnx-export.md",
+)
 
 
 def _validate_viewer(path: Path) -> None:
