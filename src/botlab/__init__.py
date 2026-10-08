@@ -101,9 +101,14 @@ from .sdk import (  # noqa: E402
     where,
 )
 
+# Headless verification lives outside the mirror: it adapts the runner's
+# assembly (sdk/_runtime/run.py) into a step-by-step public API.
+from ._headless import HeadlessRun, StepRecord, load_motion, open_headless  # noqa: E402
+
 __all__ = [
     "Controller",
     "Frame",
+    "HeadlessRun",
     "HistoryBuffer",
     "Model",
     "Motion",
@@ -117,6 +122,7 @@ __all__ = [
     "Sensor",
     "Signal",
     "Simulation",
+    "StepRecord",
     "absolute",
     "affine",
     "all_of",
@@ -134,9 +140,11 @@ __all__ = [
     "exp",
     "history",
     "inverse_rotate",
+    "load_motion",
     "log",
     "logical_not",
     "low_pass",
+    "open_headless",
     "mode_select",
     "mode_switch",
     "motion_reference",
