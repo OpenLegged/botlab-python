@@ -16,13 +16,13 @@ import json
 import zipfile
 from pathlib import Path
 
-import numpy as np
 import pytest
 
 from botlab._host import BotLabError
 from botlab._project import load_project
 from botlab._release import _is_npz_motion_source, create_release_package
 from botlab.sdk._runtime._motion import MOTION_REQUIRED_FILES, load_motion_npz
+from tests.conftest import write_motion_npz
 
 MOTION_CONTROLLER = '''
 from botlab import Model, Motion, PolicyController, Robot, concat, project
@@ -41,22 +41,6 @@ def create_controller(sim):
     control = robot.default_angles + robot.action_scale * action[robot.motor_order]
     return PolicyController(robot, control=control)
 '''
-
-
-def _write_motion_npz(path: Path, frames: int = 4, bodies: int = 2, dofs: int = 3) -> None:
-    rng = np.random.default_rng(7)
-    np.savez(
-        path,
-        joint_pos=rng.normal(size=(frames, dofs)).astype(np.float32),
-        joint_vel=rng.normal(size=(frames, dofs)).astype(np.float32),
-        body_pos_w=rng.normal(size=(frames, bodies, 3)).astype(np.float32),
-        body_quat_w=np.tile(np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32), (frames, bodies, 1)),
-        body_lin_vel_w=rng.normal(size=(frames, bodies, 3)).astype(np.float32),
-        body_ang_vel_w=rng.normal(size=(frames, bodies, 3)).astype(np.float32),
-        fps=np.float32(50.0),
-        dof_names=np.array([f"joint_{index}" for index in range(dofs)]),
-        body_names=np.array([f"body_{index}" for index in range(bodies)]),
-    )
 
 
 def _motion_project(tmp_path: Path, source: str) -> Path:
@@ -79,7 +63,7 @@ def _motion_project(tmp_path: Path, source: str) -> Path:
 def test_npz_motion_packages_as_one_asset(tmp_path: Path):
     motion_dir = tmp_path / "assets" / "motions"
     motion_dir.mkdir(parents=True)
-    _write_motion_npz(motion_dir / "demos.npz")
+    write_motion_npz(motion_dir / "demos.npz")
     project = load_project(_motion_project(tmp_path, "assets/motions/demos.npz"))
 
     package = create_release_package(project)
