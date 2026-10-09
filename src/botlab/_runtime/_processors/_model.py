@@ -378,6 +378,16 @@ class OnnxSessionPool:
 
         return onnxruntime.get_available_providers()
 
+    def clear(self):
+        """Drop every cached session; later ``get`` calls reload from disk.
+
+        ``botlab-run`` loads one project per process so the cache never
+        goes stale, but repeatable open/close cycles (``botlab.open_headless``)
+        re-fetch the same resource ids against different files — a run that
+        closes must not leave its sessions behind for the next one.
+        """
+        self._sessions = {}
+
 
 _SHARED_SESSION_POOL = None
 

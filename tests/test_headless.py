@@ -23,6 +23,7 @@ from tests.conftest import write_motion_folder, write_motion_npz  # noqa: E402
 
 TESTS_DIR = Path(__file__).resolve().parent
 IDENTITY_ONNX = (TESTS_DIR / "assets" / "identity.onnx").read_bytes()
+NEGATE_ONNX = (TESTS_DIR / "assets" / "negate.onnx").read_bytes()
 
 PENDULUM_MJCF = """<mujoco>
   <worldbody>
@@ -71,13 +72,18 @@ MAIN = (
 )
 
 
+def _pendulum_project(directory: Path, model_bytes: bytes) -> Path:
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "controller.py").write_text(CONTROLLER, encoding="utf-8")
+    (directory / "main.py").write_text(MAIN, encoding="utf-8")
+    (directory / "robot.xml").write_text(PENDULUM_MJCF, encoding="utf-8")
+    (directory / "policy.onnx").write_bytes(model_bytes)
+    return directory
+
+
 @pytest.fixture()
 def pendulum_project(tmp_path: Path) -> Path:
-    (tmp_path / "controller.py").write_text(CONTROLLER, encoding="utf-8")
-    (tmp_path / "main.py").write_text(MAIN, encoding="utf-8")
-    (tmp_path / "robot.xml").write_text(PENDULUM_MJCF, encoding="utf-8")
-    (tmp_path / "policy.onnx").write_bytes(IDENTITY_ONNX)
-    return tmp_path
+    return _pendulum_project(tmp_path, IDENTITY_ONNX)
 
 
 def test_headless_run_steps_and_records(pendulum_project: Path):
@@ -158,3 +164,55 @@ def test_load_motion_reads_both_layouts(tmp_path: Path):
     assert folder["frame_count"] == npz["frame_count"]
     assert folder["dof_count"] == npz["dof_count"]
     assert folder["fps"] == npz["fps"] == 50.0
+
+
+def test_close_evicts_cached_model_sessions(tmp_path: Path):
+    """The session pool keys by resource id, not file contents — a run that
+    closes must leave nothing behind, or the next project with the same
+    resource id silently re-runs the previous model."""
+    project_a = _pendulum_project(tmp_path / "a", IDENTITY_ONNX)
+    project_b = _pendulum_project(tmp_path / "b", NEGATE_ONNX)
+
+    with open_headless(project_a) as run:
+        assert float(run.step().action[0]) == 1.0  # identity: passes gain through
+    with open_headless(project_b) as run:
+        assert float(run.step().action[0]) == -1.0  # negate: stale session would say +1.0
+
+
+def test_close_evicts_sessions_for_a_reexported_model(tmp_path: Path):
+    project = _pendulum_project(tmp_path / "proj", IDENTITY_ONNX)
+    with open_headless(project) as run:
+        assert float(run.step().action[0]) == 1.0
+    (project / "policy.onnx").write_bytes(NEGATE_ONNX)
+    with open_headless(project) as run:
+        assert float(run.step().action[0]) == -1.0
+
+
+def test_load_motion_resolves_against_project_directory(tmp_path: Path, monkeypatch):
+    project = tmp_path / "proj"
+    project.mkdir()
+    write_motion_npz(project / "walk.npz")
+    monkeypatch.chdir(tmp_path)  # CWD has no motions anywhere
+
+    data = load_motion("walk.npz", project=project)
+    assert data["frame_count"] == 4
+
+
+def test_load_motion_errors_name_what_is_missing(tmp_path: Path):
+    empty = tmp_path / "folder"
+    empty.mkdir()
+    with pytest.raises(BotLabError, match=r"missing required file\(s\).*body_pos_w\.bin"):
+        load_motion(empty)
+
+    with pytest.raises(BotLabError, match=r"was not found \(tried"):
+        load_motion(tmp_path / "nope.npz")
+
+
+def test_run_load_motion_works_after_close_and_cwd_moves(tmp_path: Path, monkeypatch):
+    project = _pendulum_project(tmp_path / "proj", IDENTITY_ONNX)
+    write_motion_npz(project / "walk.npz")
+    run = open_headless(project)
+    run.close()
+    monkeypatch.chdir(tmp_path)  # away from the project directory
+
+    assert run.load_motion("walk.npz")["frame_count"] == 4

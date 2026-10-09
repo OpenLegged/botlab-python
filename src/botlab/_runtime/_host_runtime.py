@@ -550,44 +550,15 @@ class LocalRuntimeSession:
         return botlab_host.parameter(name)
 
     def _run_plan(self, max_control_steps):
-        import numpy as np
-
-        from ._observations import clear_pose_velocity_states
-
-        dt = 1.0 / self._control_hz
-        if self._reset_callback is not None:
-            self._call_maybe_async(self._reset_callback())
-        clear_pose_velocity_states()
-        self._executor.reset()
-        self._physics.reset()
+        self.reset_for_run()
         last_action = None
 
         step_index = 0
         while max_control_steps is None or step_index < max_control_steps:
-            frame = Frame(dt, step_index * dt, step_index)
-            self._current_frame = frame
-            self._physics.fill_observations(
-                self._executor,
-                last_action=last_action,
-                parameters=self._fill_parameters,
+            frame, last_action, _ctrl, _substep_pd = self.plan_step(
+                step_index, last_action
             )
-            self._executor.step(frame=frame)
-            action = self._policy_action()
-            last_action = np.array(action, dtype=np.float32)
-            ctrl, substep_pd = self._control_payload()
-            self._physics.step_substeps(
-                self.decimation, ctrl=ctrl, substep_pd=substep_pd,
-                observer=self._substep_observer,
-            )
-            self._physics.after_control_step()
-            if self._display is not None:
-                self._display.broadcast(
-                    frame.time,
-                    self._physics.qpos(),
-                    self._physics.qvel(),
-                )
-            if self._recorder is not None:
-                self._recorder.record_step(self._physics)
+            self._broadcast_display(frame)
             step_index += 1
             if self._physics.should_stop():
                 break
@@ -652,41 +623,92 @@ class LocalRuntimeSession:
         return step_index
 
     def _run_custom(self, max_control_steps):
-        dt = 1.0 / self._control_hz
-        if self._reset_callback is not None:
-            self._call_maybe_async(self._reset_callback())
-        self._physics.reset()
+        self.reset_for_run()
 
         step_index = 0
         while max_control_steps is None or step_index < max_control_steps:
-            frame = Frame(dt, step_index * dt, step_index)
-            self._current_frame = frame
-            self._custom_step_actions.clear()
-            self._custom_step_active = True
-            try:
-                self._call_maybe_async(self._step_callback(dt, frame.time, frame.index))
-            finally:
-                self._custom_step_active = False
-            missing = [
-                robot_id for robot_id in self._step_robot_ids
-                if robot_id not in self._custom_step_actions
-            ]
-            if missing:
-                raise RuntimeError(
-                    "[botlab] Controller.step must produce exactly one action for: "
-                    + ", ".join(missing)
-                )
-            self._physics.step_substeps(self.decimation, observer=self._substep_observer)
-            self._physics.after_control_step()
-            if self._display is not None:
-                self._display.broadcast(
-                    frame.time,
-                    self._physics.qpos(),
-                    self._physics.qvel(),
-                )
-            if self._recorder is not None:
-                self._recorder.record_step(self._physics)
+            frame = self.custom_step(step_index)
+            self._broadcast_display(frame)
             step_index += 1
             if self._physics.should_stop():
                 break
         return step_index
+
+    # -- shared rollout primitives -------------------------------------------
+    # ``botlab-run``'s loops and ``botlab.open_headless`` call the same
+    # primitives below, so a phase added here cannot silently skip the
+    # headless verification path (or vice versa).
+
+    def reset_for_run(self):
+        """The reset preamble every rollout performs before its first step."""
+        from ._observations import clear_pose_velocity_states
+
+        if self._reset_callback is not None:
+            self._call_maybe_async(self._reset_callback())
+        clear_pose_velocity_states()
+        if self._executor is not None:
+            self._executor.reset()
+        self._physics.reset()
+
+    def plan_step(self, step_index, last_action):
+        """Advance one compiled-plan control step.
+
+        ``last_action`` is the previous step's returned action (``None``
+        before the first). Returns ``(frame, action, ctrl, substep_pd)``
+        where ``action`` is a float32 copy safe to retain and feed back.
+        """
+        import numpy as np
+
+        dt = 1.0 / self._control_hz
+        frame = Frame(dt, step_index * dt, step_index)
+        self._current_frame = frame
+        self._physics.fill_observations(
+            self._executor,
+            last_action=last_action,
+            parameters=self._fill_parameters,
+        )
+        self._executor.step(frame=frame)
+        action = np.array(self._policy_action(), dtype=np.float32)
+        ctrl, substep_pd = self._control_payload()
+        self._physics.step_substeps(
+            self.decimation, ctrl=ctrl, substep_pd=substep_pd,
+            observer=self._substep_observer,
+        )
+        self._physics.after_control_step()
+        if self._recorder is not None:
+            self._recorder.record_step(self._physics)
+        return frame, action, ctrl, substep_pd
+
+    def custom_step(self, step_index):
+        """Advance one custom-controller control step (no plan payload)."""
+        dt = 1.0 / self._control_hz
+        frame = Frame(dt, step_index * dt, step_index)
+        self._current_frame = frame
+        self._custom_step_actions.clear()
+        self._custom_step_active = True
+        try:
+            self._call_maybe_async(self._step_callback(dt, frame.time, frame.index))
+        finally:
+            self._custom_step_active = False
+        missing = [
+            robot_id for robot_id in (self._step_robot_ids or [])
+            if robot_id not in self._custom_step_actions
+        ]
+        if missing:
+            raise RuntimeError(
+                "[botlab] Controller.step must produce exactly one action for: "
+                + ", ".join(missing)
+            )
+        self._physics.step_substeps(self.decimation, observer=self._substep_observer)
+        self._physics.after_control_step()
+        if self._recorder is not None:
+            self._recorder.record_step(self._physics)
+        return frame
+
+    def _broadcast_display(self, frame):
+        if self._display is not None:
+            self._display.broadcast(
+                frame.time,
+                self._physics.qpos(),
+                self._physics.qvel(),
+            )

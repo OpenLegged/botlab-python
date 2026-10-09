@@ -28,7 +28,7 @@ import os
 import sys
 from pathlib import Path
 
-from .sdk._runtime_types import Frame
+from ._project import evict_project_modules
 
 
 class StepRecord:
@@ -99,15 +99,7 @@ class HeadlessRun:
         Called automatically before the first :meth:`step` when skipped;
         call it directly to re-run a rollout (parameters overrides survive).
         """
-        session = self.session
-        if session._reset_callback is not None:
-            session._call_maybe_async(session._reset_callback())
-        if session._executor is not None:
-            from botlab.sdk._runtime._observations import clear_pose_velocity_states
-
-            clear_pose_velocity_states()
-            session._executor.reset()
-        self.physics.reset()
+        self.session.reset_for_run()
         self._step_index = 0
         self._last_action = None
         self._reset_done = True
@@ -119,24 +111,14 @@ class HeadlessRun:
         if not self._reset_done:
             self.reset()
         session = self.session
-        dt = 1.0 / self.control_hz
-        frame = Frame(dt, self._step_index * dt, self._step_index)
-        session._current_frame = frame
         if session._executor is not None:
             import numpy as np
 
-            self.physics.fill_observations(
-                session._executor,
-                last_action=self._last_action,
-                parameters=session._fill_parameters,
+            frame, action, ctrl, substep_pd = session.plan_step(
+                self._step_index, self._last_action
             )
-            session._executor.step(frame=frame)
-            action = np.array(session._policy_action(), dtype=np.float32)
             self._last_action = action
-            ctrl, substep_pd = session._control_payload()
             control = None if ctrl is None else np.array(ctrl, dtype=np.float32)
-            self.physics.step_substeps(session.decimation, ctrl=ctrl, substep_pd=substep_pd)
-            self.physics.after_control_step()
             self._step_index += 1
             return StepRecord(frame, action, control, substep_pd)
 
@@ -145,23 +127,7 @@ class HeadlessRun:
                 "headless run has no controller; the project's main.py never called "
                 "Simulation.run()"
             )
-        session._custom_step_actions.clear()
-        session._custom_step_active = True
-        try:
-            session._call_maybe_async(session._step_callback(dt, frame.time, frame.index))
-        finally:
-            session._custom_step_active = False
-        missing = [
-            robot_id for robot_id in (session._step_robot_ids or [])
-            if robot_id not in session._custom_step_actions
-        ]
-        if missing:
-            raise RuntimeError(
-                "[botlab] Controller.step must produce exactly one action for: "
-                + ", ".join(missing)
-            )
-        self.physics.step_substeps(session.decimation)
-        self.physics.after_control_step()
+        frame = session.custom_step(self._step_index)
         self._step_index += 1
         return StepRecord(frame, None, None, None)
 
@@ -177,6 +143,13 @@ class HeadlessRun:
                 break
         return records
 
+    # -- assets ---------------------------------------------------------------
+
+    def load_motion(self, source) -> dict:
+        """Read a motion asset resolving relative sources against the project
+        directory — works regardless of the caller's CWD."""
+        return load_motion(source, project=self._directory)
+
     # -- teardown ------------------------------------------------------------
 
     def close(self) -> None:
@@ -189,15 +162,20 @@ class HeadlessRun:
         try:
             self.session.close()
         finally:
+            # Drop this run's cached ONNX sessions: the pool is keyed by
+            # resource id (not file contents), so leaving them behind would
+            # make the next open_headless silently re-run this project's
+            # models — even for the same resource id re-exported on disk.
+            try:
+                from botlab.sdk._runtime._processors._model import shared_session_pool
+
+                shared_session_pool().clear()
+            except Exception:
+                pass  # teardown must never fail on pool cleanup
             # Evict the project's modules so the next open_headless (another
             # project, or this one again) re-imports controller.py and its
-            # declarations run against the fresh session — the same eviction
-            # the offline loader performs before importing.
-            for name in ("controller", "main"):
-                sys.modules.pop(name, None)
-            for entry in self._directory.iterdir():
-                if entry.is_file() and entry.suffix == ".py":
-                    sys.modules.pop(entry.stem, None)
+            # declarations run against the fresh session.
+            evict_project_modules(self._directory)
             os.chdir(self._original_directory)
             sys.path[:] = self._original_path
 
@@ -239,11 +217,7 @@ def open_headless(directory) -> HeadlessRun:
         # Evict cached project modules first: a previous load_project or run in
         # this process leaves "controller" imported, and re-importing the cache
         # would declare nothing against the fresh session.
-        for name in ("controller", "main"):
-            sys.modules.pop(name, None)
-        for entry in directory.iterdir():
-            if entry.is_file() and entry.suffix == ".py":
-                sys.modules.pop(entry.stem, None)
+        evict_project_modules(directory)
         state = _declare_project(str(directory))
         _project, robot, source = _primary_robot(state)
         manifest = state.manifest()
@@ -282,11 +256,15 @@ def open_headless(directory) -> HeadlessRun:
         raise
 
 
-def load_motion(source) -> dict:
+def load_motion(source, project=None) -> dict:
     """Read a motion asset in either layout: a ``.npz`` archive or a ``.bin``
     folder. Returns the motion data dict the runtime's ``Motion.load()``
     produces (frame/body/dof counts, fps, flat float32 channel buffers, and
     ``joint_names``/``body_names`` when the format declares them).
+
+    Relative sources resolve against ``project`` (a project directory)
+    first, then the CWD; pass ``project`` when calling outside a live run —
+    :meth:`HeadlessRun.load_motion` forwards it for you.
     """
     from botlab.sdk._runtime._motion import (
         MOTION_REQUIRED_FILES,
@@ -294,8 +272,35 @@ def load_motion(source) -> dict:
         load_motion_npz,
     )
 
-    path = Path(source)
+    from ._host import BotLabError
+
+    raw = Path(source)
+    if raw.is_absolute():
+        candidates = [raw]
+    elif project is not None:
+        candidates = [Path(project) / raw, raw]
+    else:
+        candidates = [raw]
+    existing = [candidate for candidate in candidates if candidate.exists()]
+    if not existing:
+        tried = ", ".join(str(candidate) for candidate in candidates)
+        raise BotLabError(
+            f'[botlab] motion source "{source}" was not found (tried: {tried})'
+        )
+    path = existing[0]
+    if path.is_dir():
+        missing = [name for name in MOTION_REQUIRED_FILES if not (path / name).is_file()]
+        if missing:
+            raise BotLabError(
+                f"[botlab] motion folder {path} is missing required file(s): "
+                f"{', '.join(missing)}. Motions ship either as a single .npz "
+                "archive (source ending in .npz) or as a folder with the "
+                f"required .bin files ({', '.join(MOTION_REQUIRED_FILES)})."
+            )
+        files = {name: (path / name).read_bytes() for name in MOTION_REQUIRED_FILES}
+        return load_motion_folder(files, str(path))
     if path.suffix.lower() == ".npz":
         return load_motion_npz(path.read_bytes(), str(path))
-    files = {name: (path / name).read_bytes() for name in MOTION_REQUIRED_FILES}
-    return load_motion_folder(files, str(path))
+    raise BotLabError(
+        f'[botlab] motion source "{source}" must be an NPZ file or motion folder'
+    )
