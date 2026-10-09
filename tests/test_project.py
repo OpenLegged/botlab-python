@@ -20,6 +20,10 @@ from botlab._project import (
 )
 from botlab._release import create_release_package
 
+# Packaging validates model bytes when the optional `onnx` dependency is
+# installed, so fixtures must be a real (minimal) model, not placeholder bytes.
+IDENTITY_ONNX = (Path(__file__).resolve().parent / "assets" / "identity.onnx").read_bytes()
+
 CONTROLLER = '''
 from botlab import Model, PolicyController, Robot, concat, project, constant
 
@@ -67,7 +71,7 @@ def project_dir(tmp_path: Path) -> Path:
     (robot_dir / "scene.xml").write_text("<mujoco/>", encoding="utf-8")
     model_dir = tmp_path / "assets" / "models"
     model_dir.mkdir(parents=True)
-    (model_dir / "policy.onnx").write_bytes(b"fake-onnx-bytes")
+    (model_dir / "policy.onnx").write_bytes(IDENTITY_ONNX)
     return tmp_path
 
 
@@ -229,7 +233,7 @@ def test_modify_hook_project_travels_as_sources(tmp_path: Path):
     (robot_dir / "scene.xml").write_text("<mujoco/>", encoding="utf-8")
     model_dir = tmp_path / "assets" / "models"
     model_dir.mkdir(parents=True)
-    (model_dir / "policy.onnx").write_bytes(b"fake-onnx-bytes")
+    (model_dir / "policy.onnx").write_bytes(IDENTITY_ONNX)
 
     project = load_project(tmp_path)
     assert project.plan_has_modifier is True

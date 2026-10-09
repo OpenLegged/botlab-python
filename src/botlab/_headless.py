@@ -247,7 +247,10 @@ def open_headless(directory) -> HeadlessRun:
         state = _declare_project(str(directory))
         _project, robot, source = _primary_robot(state)
         manifest = state.manifest()
-        resolve = lambda item: _resolve_source(str(directory), item)
+
+        def resolve(item):
+            return _resolve_source(str(directory), item)
+
         physics = _build_physics(
             source, robot["config"], resources=manifest["resources"], path_resolver=resolve
         )
