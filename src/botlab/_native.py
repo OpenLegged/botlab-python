@@ -34,7 +34,7 @@ def require_native_runtime() -> None:
     if probe.missing:
         raise BotLabError(
             f"{_deps.describe_missing(probe.missing)} "
-            "(or run `botlab run --browser` to execute in the browser instead)"
+            "(or drop --native to run the project in the browser editor instead)"
         )
 
 
