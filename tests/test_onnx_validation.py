@@ -124,3 +124,120 @@ def test_validator_reports_the_external_file_name(onnx_module):
         _validate_onnx_model(
             onnx_module, EXTERNAL_WEIGHTS_ONNX, "policy", []
         )
+
+
+def _model_entry(resource_id: str, data: bytes) -> dict:
+    import hashlib
+
+    return {
+        "role": "model",
+        "resourceId": resource_id,
+        "_buffer": data,
+        "integrity": {"digest": hashlib.sha256(data).hexdigest()},
+    }
+
+
+def test_policy_bank_policy_names_are_validated(onnx_module):
+    """policy_bank calls declare their models and input/output names inside
+    data["policies"], not at the node level — the validation must reach them
+    or a whole class of projects (multi-policy banks) ships unchecked."""
+    import botlab._release as release
+
+    compiled = {"plan": {"nodes": [{
+        "type": "model-onnx",
+        "data": {
+            "resourceId": "policy.onnx",
+            "policies": [
+                {"key": "walk", "resourceId": "policy.onnx", "inputName": "wrong"},
+            ],
+        },
+    }]}}
+    with pytest.raises(BotLabError, match=r'input_name "wrong"'):
+        release._validate_onnx_assets([_model_entry("policy.onnx", IDENTITY_ONNX)], compiled)
+
+
+def test_policy_bank_pipeline_stage_names_are_validated(onnx_module):
+    import botlab._release as release
+
+    compiled = {"plan": {"nodes": [{
+        "type": "model-onnx",
+        "data": {
+            "resourceId": "stage-model.onnx",
+            "policies": [
+                {"key": "walk", "pipeline": [
+                    {"key": "stage-0", "resourceId": "stage-model.onnx",
+                     "outputName": "wrong"},
+                ]},
+            ],
+        },
+    }]}}
+    with pytest.raises(BotLabError, match=r'output_name "wrong"'):
+        release._validate_onnx_assets(
+            [_model_entry("stage-model.onnx", IDENTITY_ONNX)], compiled
+        )
+
+
+def test_matching_policy_bank_names_pass(onnx_module):
+    import botlab._release as release
+
+    compiled = {"plan": {"nodes": [{
+        "type": "model-onnx",
+        "data": {
+            "resourceId": "policy.onnx",
+            "policies": [
+                {"key": "walk", "resourceId": "policy.onnx",
+                 "inputName": "obs", "outputName": "action"},
+                {"key": "run", "pipeline": [
+                    {"key": "stage-0", "resourceId": "policy.onnx",
+                     "inputName": "obs"},
+                ]},
+            ],
+        },
+    }]}}
+    # Raises nothing; the assertions live in the graph-facts cache test below.
+    release._validate_onnx_assets([_model_entry("policy.onnx", IDENTITY_ONNX)], compiled)
+
+
+def test_graph_facts_parse_once_per_digest(onnx_module, monkeypatch):
+    """The debug server rebuilds packages on every source change; model
+    parsing must be memoized by content digest so an unchanged model costs
+    nothing on rebuild — while name checks still run every call."""
+    import hashlib
+
+    import botlab._release as release
+
+    real_parse = onnx_module.load_model_from_string
+    parse_count = {"n": 0}
+
+    def counting_parse(data):
+        parse_count["n"] += 1
+        return real_parse(data)
+
+    monkeypatch.setattr(onnx_module, "load_model_from_string", counting_parse)
+    release._GRAPH_FACTS_BY_DIGEST.clear()
+    entry = _model_entry("policy.onnx", IDENTITY_ONNX)
+    compiled = {"plan": {"nodes": [{
+        "type": "model-onnx",
+        "data": {"resourceId": "policy.onnx"},
+    }]}}
+
+    release._validate_onnx_assets([entry], compiled)
+    release._validate_onnx_assets([entry], compiled)
+    assert parse_count["n"] == 1
+
+    # Cached facts still serve fresh name checks: a bad declaration fails
+    # without reparsing the model.
+    bad = {"plan": {"nodes": [{
+        "type": "model-onnx",
+        "data": {"resourceId": "policy.onnx", "inputName": "wrong"},
+    }]}}
+    with pytest.raises(BotLabError, match=r'input_name "wrong"'):
+        release._validate_onnx_assets([entry], bad)
+    assert parse_count["n"] == 1
+
+    # Different bytes (same digest as a new export) reparse.
+    other = _model_entry("policy.onnx", EXTERNAL_WEIGHTS_ONNX)
+    with pytest.raises(BotLabError, match="external file"):
+        release._validate_onnx_assets([other], None)
+    assert parse_count["n"] == 2
+    assert hashlib.sha256(IDENTITY_ONNX).hexdigest() in release._GRAPH_FACTS_BY_DIGEST
