@@ -199,15 +199,28 @@ def python_release_project_digest(manifest: dict, files: dict[str, str]) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def evict_project_modules(project_dir: Path) -> None:
+    """Drop cached top-level project modules from ``sys.modules``.
+
+    A previous load_project or run in this process leaves ``controller``/
+    ``main`` (and any sibling module) imported; re-importing the cache would
+    run no declarations against a fresh session — the same eviction
+    pyodideRuntime.stageProjectModules performs before staging sources.
+    Every path that re-opens a project goes through this helper so the
+    eviction set cannot drift between callers.
+    """
+    for name in ("controller", "main"):
+        sys.modules.pop(name, None)
+    for entry in project_dir.iterdir():
+        if entry.is_file() and entry.suffix == ".py":
+            sys.modules.pop(entry.stem, None)
+
+
 def _import_controller(project_dir: Path, source_files: dict[str, str]) -> _host.HostSession:
     session = _host.begin_project_declaration(_preset_lookup(project_dir))
     sys.path.insert(0, str(project_dir))
     try:
-        # The declaration channel re-imports controller.py, so evict cached
-        # project modules the same way pyodideRuntime.stageProjectModules does.
-        for name in source_files:
-            if name.endswith(".py"):
-                sys.modules.pop(name.removesuffix(".py"), None)
+        evict_project_modules(project_dir)
         importlib.import_module("controller")
         return session
     finally:
