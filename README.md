@@ -12,18 +12,11 @@ cd my-robot-project
 botlab run
 ```
 
-`botlab run` (the default) is the native flow: the CLI compiles the project,
-executes it in a CPython subprocess (native `mujoco` + `onnxruntime` + NumPy),
-and opens the browser at `embed.html?ws=…` — a viewer over the loopback
-display stream. The browser renders; it never computes. `Ctrl+C` stops the
-run. The startup banner prints the viewer and stream URLs; use
-`--no-browser` to skip auto-opening, or `--headless` to run without a viewer
-or HTTP server.
-
-`botlab run --browser` is the live editor debug loop instead: it serves the
-complete BotLab editor — not a stripped-down release page — with the project
-tree, Monaco editor, Console, Watch, and Metrics panels, and the browser
-itself executes the project (MuJoCo WASM + ONNX Runtime Web):
+`botlab run` (the default) is the live editor debug loop: it serves the
+complete BotLab editor — the same web UI as the platform, not a
+stripped-down release page — with the project tree, Monaco editor, Console,
+Watch, and Metrics panels, and the browser itself executes the project
+(MuJoCo WASM + ONNX Runtime Web):
 
 1. Import `controller.py` and collect the project declarations, including
    resources, parameters, and runtime frequencies.
@@ -42,9 +35,18 @@ remains available for previewing the published form.
 
 In the debug loop, edit the source and refresh the page — the editor rereads
 the directory and the debug release is rebuilt without restarting the command.
-In the native flow, edits take effect by restarting the run. Use `--verbose`
-to show resources, plan size, and package size. Use `botlab build` when you
-need a compressed `release.zip` for distribution or upload.
+
+`botlab run --native` is the native flow instead: the CLI compiles the
+project, executes it in a CPython subprocess (native `mujoco` + `onnxruntime`
++ NumPy), and opens the browser at `embed.html?ws=…` — a viewer over the
+loopback display stream. The browser renders; it never computes. `Ctrl+C`
+stops the run. The startup banner prints the viewer and stream URLs; use
+`--no-browser` to skip auto-opening, or `--headless` to run without a viewer
+or HTTP server. In the native flow, edits take effect by restarting the run.
+
+Use `--verbose` to show resources, plan size, and package size. Use
+`botlab build` when you need a compressed `release.zip` for distribution or
+upload.
 
 The CLI is project-agnostic: it works with any BotLab project that follows the
 two-file `main.py` + `controller.py` contract and contains no robot- or
@@ -101,7 +103,7 @@ resource preset fields.
 
 | Command | Description |
 | --- | --- |
-| `botlab run [DIR]` | Compile and run natively (local MuJoCo + ONNX Runtime), opening the browser as a read-only `?ws=` viewer. `--browser` switches to the editor debug loop where the browser executes the project. Neither writes a zip unless `--out` is provided. Supports `--verbose`, `--no-browser`, `--host`, and `--port`. |
+| `botlab run [DIR]` | Run in the browser: serve the complete editor (the platform web UI) from live sources; the browser executes the project and edits land on reload. `--native` executes locally instead (local MuJoCo + ONNX Runtime) with the browser as a read-only `?ws=` viewer. Neither writes a zip unless `--out` is provided. Supports `--verbose`, `--no-browser`, `--host`, and `--port`. |
 | `botlab build [DIR]` | Export `release.zip` to the project directory or a path selected with `--out`. The output uses the same format as BotLab's hosted `/d/<id>/` demos. `--site <dir>` additionally assembles a self-contained static site (see below). |
 | `botlab validate [DIR]` | Collect declarations, compile the plan, and build the release in memory without starting a server. |
 | `botlab run [DIR] --headless` | Native headless run without the viewer server. Supports custom Python controllers and requires the `runtime` extra. |
@@ -133,13 +135,14 @@ The project must be self-contained — every resource under the project
 directory. A package that still needs a live-Python (`modify=…`) controller is
 rejected with a hint, matching what the embed runtime itself would do.
 
-## Native local runtime (`botlab run`)
+## Native local runtime (`botlab run --native` / `--headless`)
 
-`botlab run --browser` executes the simulation in the browser (MuJoCo WASM +
-ONNX Runtime Web). By default, everything runs natively in a CPython process:
-native `mujoco` physics, `onnxruntime` inference, and NumPy signal math.
-`botlab run` serves the viewer page and opens it for you; `--headless` runs
-without the viewer or HTTP server (CI, smoke tests, no UI snapshot needed).
+Plain `botlab run` executes the simulation in the browser (MuJoCo WASM +
+ONNX Runtime Web). With `--native`, everything runs natively in a CPython
+process: native `mujoco` physics, `onnxruntime` inference, and NumPy signal
+math. `botlab run --native` serves the viewer page and opens it for you;
+`--headless` runs without the viewer or HTTP server (CI, smoke tests, no UI
+snapshot needed).
 
 ```bash
 pip install "botlab-python[runtime]"
@@ -157,16 +160,16 @@ BOTLAB_STEPS=500 botlab run my-robot-project --headless
   `MUJOCO_GL=egl`. GPU inference needs `onnxruntime-gpu` matching your local
   CUDA/cuDNN; CPU works out of the box.
 - Without the `runtime` extra the CLI still compiles and packages projects;
-  `botlab run` (native default or `--headless`) fails up front listing the
-  missing packages and the install command — `botlab run --browser` keeps
-  working, since the browser brings its own runtimes.
-- With the viewer, `botlab run` compiles the project before starting the native runner, so it
+  `botlab run --native` and `--headless` fail up front listing the missing
+  packages and the install command — plain `botlab run` keeps working, since
+  the browser brings its own runtimes.
+- `botlab run --native` compiles the project before starting the native runner, so it
   accepts the same controller set as `botlab build` (compiled
   `PolicyController` plans and `Signal.action(modify=...)` hooks). Projects
   built around a custom `Controller.step()` class run via `botlab run --headless`, which
   installs the live session before `main.py` executes.
 
-`botlab run` opens a loopback-only WebSocket and prints a token URL like
+`botlab run --native` opens a loopback-only WebSocket and prints a token URL like
 `ws://127.0.0.1:<port>/display/<token>`. The bundled viewer uses this URL as
 its `?ws=` parameter and requests the scene protocol: one scene snapshot
 followed by little-endian float32 body-pose frames. The socket validates
@@ -200,13 +203,13 @@ visible.
 
 The default wheel includes the Python SDK, native runner, bundled docs, and a
 small Three.js display frontend under `botlab/ui/`. It contains no MuJoCo,
-ONNX Runtime, or Pyodide WASM and no browser editor. Native `botlab run` serves
+ONNX Runtime, or Pyodide WASM and no browser editor. `botlab run --native` serves
 this frontend and sends the compiled scene, textures, and body poses from the
 native MuJoCo process. The browser renders the scene and lets you orbit and
 zoom the camera; physics and inference remain in CPython. Native preview,
 `validate`, and plain `build` do not fetch a browser runtime.
 
-`run --browser`, a served `run --out` preview, and `build --site` use a separate
+Plain `run`, a served `run --out` preview, and `build --site` use a separate
 full browser runtime archive. On first use the CLI fetches the archive pinned
 to the installed package version from the matching GitHub release, verifies
 its manifest and file hashes, and installs it in the user cache. Later uses

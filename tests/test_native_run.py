@@ -176,14 +176,16 @@ def _ui_snapshot_present() -> bool:
     return (ui_snapshot_dir() / "index.html").is_file()
 
 
-def test_run_browser_flag_parses(project_dir):
+def test_run_execution_flags_parse(project_dir):
     from botlab._cli import build_parser
 
     args = build_parser().parse_args(["run", str(project_dir), "--browser", "--no-server"])
     assert args.browser is True
+    args = build_parser().parse_args(["run", str(project_dir), "--native", "--no-server"])
+    assert args.native is True
 
 
-def test_require_native_runtime_suggests_browser_fallback(monkeypatch):
+def test_require_native_runtime_suggests_editor_fallback(monkeypatch):
     from botlab import _native
     from botlab._runtime import _deps
 
@@ -192,7 +194,7 @@ def test_require_native_runtime_suggests_browser_fallback(monkeypatch):
         missing = ("mujoco", "onnxruntime")
 
     monkeypatch.setattr(_deps, "probe_runtime_deps", lambda: FakeProbe())
-    with pytest.raises(Exception, match=r"--browser"):
+    with pytest.raises(Exception, match=r"drop --native"):
         _native.require_native_runtime()
 
 
@@ -206,7 +208,7 @@ MICRODUCK_TEMPLATE = BOTLAB_CHECKOUT / "public/templates/microduck"
     or not MICRODUCK_TEMPLATE.is_dir(),
     reason="runtime extras, UI snapshot, or the botlab checkout missing",
 )
-def test_cli_run_default_is_native_with_viewer():
+def test_cli_run_native_flag_serves_viewer():
     # A PolicyController project: the CLI compile contract (main.py runs
     # offline to capture the plan) only accepts compilable controllers.
     result = subprocess.run(
@@ -216,6 +218,7 @@ def test_cli_run_default_is_native_with_viewer():
             "botlab._cli",
             "run",
             str(MICRODUCK_TEMPLATE),
+            "--native",
             "--no-browser",
             "--port",
             "0",

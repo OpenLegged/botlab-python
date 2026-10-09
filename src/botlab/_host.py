@@ -600,8 +600,8 @@ def registerSubstepObserver(callback):  # noqa: N802
         return _runtime_session.registerSubstepObserver(callback)
     raise BotLabError(
         "on_substep is only supported by the local botlab-python runtime "
-        "(botlab run); the browser editor and published packages do not run "
-        "Python per physics substep"
+        "(botlab run --native or --headless); the browser editor and published "
+        "packages do not run Python per physics substep"
     )
 
 

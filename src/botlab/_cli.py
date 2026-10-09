@@ -1,12 +1,13 @@
 """The ``botlab`` command line interface.
 
-- ``botlab run [PROJECT_DIR]`` — run the project natively: compile it, execute
-  it with local MuJoCo and ONNX Runtime, and open the browser as a read-only
-  ``?ws=`` viewer of the running simulation (needs the ``runtime`` extra).
-  ``--headless`` runs without a viewer or HTTP server.
-  ``--browser`` switches to the editor debug loop, where the browser itself
-  executes the project and the server always serves current sources and
-  assets straight from the directory. No zip file is written either way.
+- ``botlab run [PROJECT_DIR]`` — run the project in the browser: serve the
+  complete BotLab editor — the same web UI as the platform, with the project
+  tree, editor, Console/Watch/Metrics panels — from live sources and assets
+  straight from the directory, so edits land on reload. No zip file is
+  written. ``--native`` executes the project locally instead (local MuJoCo +
+  ONNX Runtime, needs the ``runtime`` extra) and opens the browser as a
+  read-only ``?ws=`` viewer of the running simulation. ``--headless`` runs
+  natively without a viewer or HTTP server.
 - ``botlab build [PROJECT_DIR]`` — export release.zip locally (no server, no
   upload); the same package the platform's ``/d/<id>/`` demos are served from.
   ``--site <dir>`` assembles a self-contained static site around it instead
@@ -106,45 +107,46 @@ def _cmd_run(args: argparse.Namespace) -> int:
         )
         return 0
 
-    if args.browser:
-        if args.report:
-            raise BotLabError("--report only applies to native runs, not --browser.")
-        # Browser debug loop: the editor itself executes the project (MuJoCo
-        # WASM + ONNX Runtime Web); this server only feeds it sources and
-        # assets, rebuilding on change so edits land on reload.
-        package = build_debug_release(project)
-        provider = DebugReleaseProvider(project_dir, package, _project_signature(project_dir))
-        if os.environ.get("BOTLAB_VERBOSE"):
-            print(
-                f"[botlab] debug release: {len(package)} bytes in memory (no zip written) — "
-                "edit the project, reload the page, the release rebuilds"
-            )
+    if args.native:
+        # Native execution: physics and inference run in a local CPython
+        # subprocess; the browser only renders the loopback display stream.
         if args.no_server:
             return 0
-        serve_project(
+        require_native_runtime()
+        return run_native(
+            project,
             project_dir,
-            None,
-            args.host,
-            args.port,
+            host=args.host,
+            port=args.port,
             open_browser=not args.no_browser,
-            release_provider=provider,
-            ui_dir=ensure_browser_runtime(),
+            report_path=args.report,
         )
-        return 0
 
-    # Default: native execution. Physics and inference run in a local CPython
-    # subprocess; the browser only renders the loopback display stream.
+    # Default: the browser editor debug loop (the full web UI). The editor
+    # itself executes the project (MuJoCo WASM + ONNX Runtime Web); this
+    # server only feeds it sources and assets, rebuilding on change so edits
+    # land on reload. `--browser` spells the default out explicitly.
+    if args.report:
+        raise BotLabError("--report only applies to native runs, not the editor debug loop.")
+    package = build_debug_release(project)
+    provider = DebugReleaseProvider(project_dir, package, _project_signature(project_dir))
+    if os.environ.get("BOTLAB_VERBOSE"):
+        print(
+            f"[botlab] debug release: {len(package)} bytes in memory (no zip written) — "
+            "edit the project, reload the page, the release rebuilds"
+        )
     if args.no_server:
         return 0
-    require_native_runtime()
-    return run_native(
-        project,
+    serve_project(
         project_dir,
-        host=args.host,
-        port=args.port,
+        None,
+        args.host,
+        args.port,
         open_browser=not args.no_browser,
-        report_path=args.report,
+        release_provider=provider,
+        ui_dir=ensure_browser_runtime(),
     )
+    return 0
 
 
 def _cmd_build(args: argparse.Namespace) -> int:
@@ -256,16 +258,22 @@ def build_parser() -> argparse.ArgumentParser:
 
     run = subparsers.add_parser(
         "run",
-        help="run a project natively (local MuJoCo + ONNX Runtime); --browser "
-        "keeps the browser debug loop",
+        help="run a project in the browser editor (the full web UI); "
+        "--native executes locally with a read-only viewer",
     )
     run.add_argument("project_dir", nargs="?", default=".", help="project directory (default: cwd)")
     execution = run.add_mutually_exclusive_group()
     execution.add_argument(
         "--browser",
         action="store_true",
-        help="execute in the browser instead: serve the full editor debug loop "
-        "(MuJoCo WASM + ONNX Runtime Web)",
+        help="execute in the browser editor — the default, spelled out "
+        "explicitly (MuJoCo WASM + ONNX Runtime Web)",
+    )
+    execution.add_argument(
+        "--native",
+        action="store_true",
+        help="execute natively in CPython (local MuJoCo + ONNX Runtime); the "
+        "browser only renders a read-only ``?ws=`` viewer of the simulation",
     )
     execution.add_argument(
         "--headless",

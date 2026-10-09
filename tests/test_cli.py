@@ -57,9 +57,10 @@ def test_run_no_server_writes_out(project_dir, tmp_path):
     assert target.is_file()
 
 
-def test_run_headless_rejects_browser_execution():
+@pytest.mark.parametrize("execution", ["--browser", "--native"])
+def test_run_headless_rejects_other_execution_flags(execution):
     with pytest.raises(SystemExit) as error:
-        main(["run", "--headless", "--browser"])
+        main(["run", "--headless", execution])
     assert error.value.code == 2
 
 

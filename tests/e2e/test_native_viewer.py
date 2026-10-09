@@ -37,6 +37,7 @@ def native_run():
             "botlab._cli",
             "run",
             str(MICRODUCK_TEMPLATE),
+            "--native",
             "--port",
             "0",
             "--no-browser",
