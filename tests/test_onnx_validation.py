@@ -78,7 +78,10 @@ def test_garbage_bytes_are_rejected_with_an_actionable_error(tmp_path: Path, onn
 
 def test_external_data_weights_are_rejected(tmp_path: Path, onnx_module):
     project = load_project(_project(tmp_path, EXTERNAL_WEIGHTS_ONNX))
-    with pytest.raises(BotLabError, match=r"external file.*convert_model_from_external_data"):
+    # The error embeds a multi-line inline recipe; `.` must cross newlines.
+    with pytest.raises(
+        BotLabError, match=r"(?s)external file.*convert_model_from_external_data"
+    ):
         create_release_package(project)
 
 
