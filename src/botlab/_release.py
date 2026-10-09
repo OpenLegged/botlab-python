@@ -53,7 +53,10 @@ def _source_file_name(resource: dict, role: str) -> str:
     if source.startswith(("data:", "blob:")):
         extension = "onnx" if role == "model" else ("xml" if role in ("robot", "scene") else "bin")
         return f"{_sanitize_segment(resource['id'], role)}.{extension}"
-    name = source.rstrip("/").split("/")[-1]
+    # Same URL stripping the npz detection uses, so a query-bearing source
+    # still derives its plain file name ("demos.npz?raw=1" → "demos.npz") —
+    # consumers key npz-ness off the packaged name.
+    name = _strip_url_extras(source).rstrip("/").split("/")[-1]
     return _sanitize_segment(name, f"{_sanitize_segment(resource['id'], role)}.bin")
 
 
@@ -84,15 +87,20 @@ def _should_package(resource: dict) -> bool:
     return False
 
 
+def _strip_url_extras(source: str) -> str:
+    """Drop the registry scheme and URL query/fragment — the parts of a
+    source that never name a file on disk."""
+    if source.startswith("registry://"):
+        source = source[len("registry://"):]
+    return source.split("?", 1)[0].split("#", 1)[0]
+
+
 def _is_npz_motion_source(source: str) -> bool:
     """Mirror the engine's isNpzMotionSource: motion archives package as one
-    asset; everything else is the seven-file .bin folder layout."""
-    if source.startswith("registry://"):
-        path = source[len("registry://"):]
-    else:
-        path = source
-    path = path.split("?", 1)[0].split("#", 1)[0]
-    return path.rstrip("/").lower().endswith(".npz")
+    asset; everything else is the seven-file .bin folder layout. A trailing
+    slash means folder, exactly like the engine (URL pathname) and the local
+    runtime's ``os.path.isdir`` dispatch."""
+    return _strip_url_extras(source).lower().endswith(".npz")
 
 
 def _pack_resource(project_dir: Path, resource: dict, used: set[str]) -> list[dict]:

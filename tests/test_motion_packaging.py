@@ -112,7 +112,9 @@ def test_missing_folder_files_error_mentions_npz(tmp_path: Path):
         ("assets/motions/demos.npz", True),
         ("assets/motions/DEMOS.NPZ", True),
         ("assets/motions/demos.npz?raw=1", True),
-        ("assets/motions/demos.npz/", True),
+        # A trailing slash means folder — same as the engine's isNpzMotionSource
+        # (URL pathname keeps the slash) and physics.load_motion (isdir).
+        ("assets/motions/demos.npz/", False),
         ("https://example.com/motions/walk.npz", True),
         ("registry://release-abc/demos.npz", True),
         ("assets/motions/demos", False),
@@ -122,3 +124,23 @@ def test_missing_folder_files_error_mentions_npz(tmp_path: Path):
 )
 def test_is_npz_motion_source(source: str, expected: bool):
     assert _is_npz_motion_source(source) is expected
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ("assets/motions/demos.npz", "demos.npz"),
+        ("assets/motions/demos.npz?raw=1", "demos.npz"),
+        ("assets/motions/demos.npz#anchor", "demos.npz"),
+        ("https://example.com/motions/walk.npz?raw=1", "walk.npz"),
+        ("registry://release-abc/demos.npz", "demos.npz"),
+        ("assets/motions/demos/", "demos"),
+    ],
+)
+def test_source_file_name_strips_url_extras(source: str, expected: str):
+    """The packaged name must keep its .npz suffix: consumers (the engine's
+    restore path) key npz-ness off the asset name, so detection and name
+    derivation have to strip query/fragment identically."""
+    from botlab._release import _source_file_name
+
+    assert _source_file_name({"id": "motion-1", "source": source}, "motion") == expected
