@@ -296,7 +296,21 @@ def _optional_onnx_module():
     return onnx
 
 
-def _validate_onnx_model(onnx, data: bytes, resource_id: str, calls: list[dict]) -> None:
+_GRAPH_FACTS_BY_DIGEST: dict[str, tuple[list[str], list[str]]] = {}
+
+
+def _model_graph_facts(onnx, data: bytes, resource_id: str, digest: str | None):
+    """Parse the model once per content digest: (input names, output names).
+
+    The parse plus the external-weights check are the expensive part of
+    validation (a full protobuf read); the debug server rebuilds packages on
+    every source change, so successful facts are memoized by the digest the
+    package entry already computed. Faults are never memoized — they raise
+    again on the next build until the bytes change.
+    """
+    if digest is not None and digest in _GRAPH_FACTS_BY_DIGEST:
+        return _GRAPH_FACTS_BY_DIGEST[digest]
+
     label = f'model resource "{resource_id}"'
     try:
         model = onnx.load_model_from_string(data)
@@ -328,10 +342,22 @@ def _validate_onnx_model(onnx, data: bytes, resource_id: str, calls: list[dict])
             "  onnx.save(model, path)"
         )
 
+    facts = (
+        [item.name for item in model.graph.input],
+        [item.name for item in model.graph.output],
+    )
+    if digest is not None:
+        _GRAPH_FACTS_BY_DIGEST[digest] = facts
+    return facts
+
+
+def _validate_onnx_model(
+    onnx, data: bytes, resource_id: str, calls: list[dict], digest: str | None = None
+) -> None:
+    label = f'model resource "{resource_id}"'
+    input_names, output_names = _model_graph_facts(onnx, data, resource_id, digest)
     if not calls:
         return
-    input_names = [item.name for item in model.graph.input]
-    output_names = [item.name for item in model.graph.output]
     for call in calls:
         declared_input = call.get("inputName")
         if declared_input is not None and declared_input not in input_names:
@@ -345,6 +371,28 @@ def _validate_onnx_model(onnx, data: bytes, resource_id: str, calls: list[dict])
                 f'[botlab] {label} call declares output_name "{declared_output}" but the '
                 f'model outputs are {output_names}. Pass output_name matching the graph.'
             )
+
+
+def _model_calls_in_node(data: dict):
+    """Every (resourceId, call) pair a model-onnx node declares.
+
+    Covers plain calls (the node's own resourceId plus inputName/outputName)
+    and policy banks: each policy names its own resource and input/output
+    names, and pipeline stages do the same per stage.
+    """
+    yield data
+    policies = data.get("policies")
+    if isinstance(policies, list):
+        for policy in policies:
+            if not isinstance(policy, dict):
+                continue
+            if isinstance(policy.get("resourceId"), str):
+                yield policy
+            pipeline = policy.get("pipeline")
+            if isinstance(pipeline, list):
+                for stage in pipeline:
+                    if isinstance(stage, dict) and isinstance(stage.get("resourceId"), str):
+                        yield stage
 
 
 def _validate_onnx_assets(packed: list[dict], compiled: dict | None) -> None:
@@ -362,11 +410,16 @@ def _validate_onnx_assets(packed: list[dict], compiled: dict | None) -> None:
         for node in compiled.get("plan", {}).get("nodes", []):
             if isinstance(node, dict) and node.get("type") == "model-onnx":
                 data = node.get("data") or {}
-                resource_id = data.get("resourceId")
-                if isinstance(resource_id, str):
-                    calls.setdefault(resource_id, []).append(data)
+                for call in _model_calls_in_node(data):
+                    resource_id = call.get("resourceId")
+                    if isinstance(resource_id, str):
+                        calls.setdefault(resource_id, []).append(call)
     for entry in packed:
         if entry["role"] == "model":
             _validate_onnx_model(
-                onnx, entry["_buffer"], entry["resourceId"], calls.get(entry["resourceId"], [])
+                onnx,
+                entry["_buffer"],
+                entry["resourceId"],
+                calls.get(entry["resourceId"], []),
+                digest=entry["integrity"]["digest"],
             )
