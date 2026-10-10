@@ -360,7 +360,15 @@ class HostSession:
         low = parameter.get("min")
         high = parameter.get("max")
         if (low is not None and value < low) or (high is not None and value > high):
-            raise BotLabError(f"[botlab] Parameter {pid!r} value is outside its range")
+            bounds = []
+            if low is not None:
+                bounds.append(f"min {low}")
+            if high is not None:
+                bounds.append(f"max {high}")
+            raise BotLabError(
+                f"[botlab] Parameter {pid!r} value {value} is outside its range "
+                f"({', '.join(bounds)})"
+            )
         self._parameter_overrides[pid] = value
 
     def parameter_range(self, name):
@@ -525,8 +533,11 @@ class _ProjectStateView:
         The runtime re-queries parameters every control step, so calling this
         between steps of a rollout changes the simulation from the next step
         on — the same live effect a key press or slider drag has in the
-        browser. The declared default is untouched; a fresh ``reset`` clears
-        overrides along with the declarations.
+        browser. The declared default is untouched. Overrides live on the
+        declaration session: ``HeadlessRun.reset()`` keeps them (a browser
+        refresh keeps slider positions), while re-declaring the project
+        (``project_state().reset(directory)``, or the next ``open_headless``)
+        starts over from the declared defaults.
         """
         self._session().set_parameter(str(name), value)
 

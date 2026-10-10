@@ -15,7 +15,6 @@ hands it back unrun:
         run.reset()
         for step in run.steps(320):
             error = metric(run.physics.data, step.frame.index)
-        run.close()
 
 :func:`load_motion` reads either motion layout (.npz archive or .bin folder)
 for reference data; the runtime accepts both, so verification no longer has
@@ -51,13 +50,12 @@ class StepRecord:
 class HeadlessRun:
     """A live native runtime for one project, driven one control step at a time."""
 
-    def __init__(self, directory, manifest, physics, session, path_resolver,
+    def __init__(self, directory, manifest, physics, session,
                  original_directory=None, original_path=None):
         self._directory = directory
         self._manifest = manifest
         self.physics = physics
         self.session = session
-        self._path_resolver = path_resolver
         self._step_index = 0
         self._last_action = None
         self._closed = False
@@ -241,7 +239,7 @@ def open_headless(directory) -> HeadlessRun:
 
         runpy.run_path(str(directory / "main.py"), run_name="__main__")
         return HeadlessRun(
-            directory, manifest, physics, session, resolve,
+            directory, manifest, physics, session,
             original_directory=original_directory, original_path=original_path,
         )
     except BaseException:
