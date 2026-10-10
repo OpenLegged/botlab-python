@@ -100,7 +100,7 @@ class DisplayServerTest(unittest.TestCase):
 
     def test_stop_disconnects_clients_and_is_idempotent(self):
         server = self.start_server()
-        client = connect(server.url, legacy=True)
+        client = connect(server.url)
         try:
             client.recv(timeout=5)
             server.stop()
