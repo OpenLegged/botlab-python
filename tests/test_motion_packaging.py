@@ -21,7 +21,7 @@ import pytest
 from botlab._host import BotLabError
 from botlab._project import load_project
 from botlab._release import _is_npz_motion_source, create_release_package
-from botlab.sdk._runtime._motion import MOTION_REQUIRED_FILES, load_motion_npz
+from botlab._runtime._motion import MOTION_REQUIRED_FILES, load_motion_npz
 from tests.conftest import write_motion_npz
 
 IDENTITY_ONNX = (Path(__file__).parent / "assets" / "identity.onnx").read_bytes()

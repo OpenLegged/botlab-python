@@ -165,7 +165,7 @@ class HeadlessRun:
             # make the next open_headless silently re-run this project's
             # models — even for the same resource id re-exported on disk.
             try:
-                from botlab.sdk._runtime._processors._model import shared_session_pool
+                from botlab._runtime._processors._model import shared_session_pool
 
                 shared_session_pool().clear()
             except Exception:
@@ -198,11 +198,10 @@ def open_headless(directory) -> HeadlessRun:
 
     import botlab_host
 
-    from botlab.sdk._runtime._host_runtime import LocalRuntimeSession, PooledModelRuntime
-    from botlab.sdk._runtime.run import (
+    from botlab._runtime._host_runtime import LocalRuntimeSession, PooledModelRuntime
+    from botlab._runtime.run import (
         _build_physics,
         _declare_project,
-        _primary_robot,
         _require_runtime,
         _resolve_source,
     )
@@ -217,15 +216,12 @@ def open_headless(directory) -> HeadlessRun:
         # would declare nothing against the fresh session.
         evict_project_modules(directory)
         state = _declare_project(str(directory))
-        _project, robot, source = _primary_robot(state)
         manifest = state.manifest()
 
         def resolve(item):
             return _resolve_source(str(directory), item)
 
-        physics = _build_physics(
-            source, robot["config"], resources=manifest["resources"], path_resolver=resolve
-        )
+        physics = _build_physics(state, str(directory), resolve)
         session = LocalRuntimeSession(
             physics,
             models=PooledModelRuntime(path_resolver=resolve),
@@ -264,7 +260,7 @@ def load_motion(source, project=None) -> dict:
     first, then the CWD; pass ``project`` when calling outside a live run —
     :meth:`HeadlessRun.load_motion` forwards it for you.
     """
-    from botlab.sdk._runtime._motion import (
+    from botlab._runtime._motion import (
         MOTION_REQUIRED_FILES,
         load_motion_folder,
         load_motion_npz,

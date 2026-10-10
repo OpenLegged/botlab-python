@@ -24,7 +24,7 @@ from . import _host
 sys.modules.setdefault("botlab_host", _host)
 
 # Headless verification lives outside the mirror: it adapts the runner's
-# assembly (sdk/_runtime/run.py) into a step-by-step public API.
+# assembly (_runtime/run.py) into a step-by-step public API.
 from ._headless import HeadlessRun, StepRecord, load_motion, open_headless  # noqa: E402
 from .sdk import (  # noqa: E402
     Controller,
