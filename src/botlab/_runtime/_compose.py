@@ -220,7 +220,9 @@ def _rewrite_assets_to_absolute(xml, xml_path):
                 f'[mujocoWorker] Extra robot asset "{file}" was not found under {base_dir}'
             )
         pattern = re.compile(r"(\bfile\s*=\s*)([\"'])" + re.escape(file) + r"\2")
-        result = pattern.sub(lambda m: f"{m.group(1)}{m.group(2)}{absolute}{m.group(2)}", result)
+        result = pattern.sub(
+            lambda m, _absolute=absolute: f"{m.group(1)}{m.group(2)}{_absolute}{m.group(2)}", result
+        )
     return result
 
 

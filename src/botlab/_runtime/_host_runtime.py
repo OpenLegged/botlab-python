@@ -213,7 +213,7 @@ class LocalRuntimeSession:
 
         groups = []
         try:
-            for sub_plan, robot_id in zip(controllers, plan_robot_ids):
+            for sub_plan, robot_id in zip(controllers, plan_robot_ids, strict=True):
                 executor, nodes = self._compile_sub_plan(registry, sub_plan)
                 scope = self._physics.robot_scope(robot_id)
                 for binding in executor.observation_bindings:

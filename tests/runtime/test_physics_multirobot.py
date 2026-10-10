@@ -7,7 +7,6 @@ import numpy as np
 
 from botlab._runtime import _compose, _physics
 
-
 DUCK_XML = """
 <mujoco>
   <worldbody>
