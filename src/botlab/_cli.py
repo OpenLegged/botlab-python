@@ -538,6 +538,9 @@ def build_parser() -> argparse.ArgumentParser:
     agent.add_argument("agent_args", nargs=argparse.REMAINDER)
     agent.set_defaults(func=_cmd_agent)
 
+    control = subparsers.add_parser("control", help="control project middleware through the generic Control API")
+    control.add_argument("control_args", nargs=argparse.REMAINDER)
+
     docs = subparsers.add_parser(
         "docs",
         help="print where the bundled docs (component reference, decision table, error guide) live",
@@ -549,6 +552,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] == "control":
+        from .control.cli import main as control_main
+
+        return control_main(argv[1:])
     args = build_parser().parse_args(argv)
     try:
         return args.func(args)
