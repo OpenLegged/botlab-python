@@ -3,11 +3,11 @@
 BotLab's Python SDK and command-line interface. Declare robot projects with
 `project()`, `Robot`, `Model`, `Sensor`, `Motion`, and `Scene` in
 `controller.py`, express control logic as composable signals, and run them
-natively on your machine with one command — real MuJoCo physics and ONNX
-Runtime inference in local CPython, with the browser as a read-only viewer.
+in the browser with one command — MuJoCo WASM physics and ONNX Runtime Web
+inference. Native CPython execution is available with `--native`.
 
 ```bash
-pip install "botlab-python[runtime]"
+pip install botlab-python
 cd my-robot-project
 botlab run
 ```
@@ -25,8 +25,8 @@ Watch, and Metrics panels, and the browser itself executes the project
 3. Assemble an integrity-checked release in memory and serve it to the
    browser without writing an archive to disk.
 4. Start a local static server and open the browser. The Vite-style startup
-   banner prints clickable `Local` and `Network` links; the server binds to
-   `0.0.0.0` by default so devices on the same network can connect.
+   banner prints a clickable `Local` link; browser runs bind to `127.0.0.1`
+   by default. Use `--host 0.0.0.0` for ordinary LAN access (HIL is disabled).
 
 The editor opens at `/`. Its localized `index.html` includes the
 `window.BOTLAB_LOCAL_PROJECT` flag, so it loads the current directory from
@@ -51,6 +51,34 @@ upload.
 The CLI is project-agnostic: it works with any BotLab project that follows the
 two-file `main.py` + `controller.py` contract and contains no robot- or
 policy-specific behavior.
+
+## Hardware-in-the-loop
+
+Run `botlab run`, open **Target manager**, and add a Linux target over SSH.
+BotLab can inspect a clean system, help configure a supported network interface,
+and install its Agent plus matching Linux inference dependencies. The board needs
+a booted Linux system, Python 3.10+ and reachable SSH; it does not need BotLab,
+robot-specific programs, pip or Internet access preinstalled. New SSH host keys
+require explicit verification; passwords are transient.
+
+Once prepared, choose the target and **Run on Target**. BotLab builds, deploys and
+loads the current project's ONNX models before running them on the board, while
+browser MuJoCo and the controller graph remain on the host. The separate run menu
+provides Build → Deploy → Load project → Run: deployment uses the last successful
+build, Load project directly connects that exact version after it is deployed to
+the connected target, and Run starts only that connected version with matching
+local source and models. Choose other projects or versions explicitly in Target
+manager's Deployed projects tab. Stop and Unload remain separate actions. The
+target manager keeps multiple projects and versions under `~/botlab/projects/`; one session executes
+at a time. The CLI also supports `botlab target discover/add/inspect/provision`,
+`botlab deploy --target <name>`, and `botlab run --hil <name>`.
+
+This unreleased implementation uses ONNX Runtime CPU on compatible Linux
+ARM64/x86_64 targets over verified SSH forwarding. It is model-service HIL, not
+full-controller deployment or hard real-time scheduling. RDK X5 is an example;
+BPU/MCU support and per-project dependency environments are not implemented.
+Install the matching SDK and browser runtime. See the [HIL guide](docs/hil.md)
+for first connection, CLI commands, deployment layout and current limits.
 
 ## Project structure
 
@@ -354,3 +382,39 @@ only; this verification command does not upload an sdist or any other artifact.
 ## License
 
 Proprietary — same as the main BotLab repository.
+
+## Browser adapters for hardware-in-the-loop projects
+
+Projects that provide a browser controller and a hardware bridge can use the
+standard launcher with an explicit project adapter:
+
+```bash
+botlab run /path/to/project --browser-adapter hardware.web:run \
+  --inference-endpoint 192.168.128.10:50051
+```
+
+The selected callable receives `botlab.browser.BrowserRunContext` and returns an
+exit code. The context contains `project_dir`, `ui_dir`, `host`, `port`,
+`open_browser`, and optional `inference_endpoint`. The adapter runs with the
+project on the Python import path and as the working directory. Selecting an
+adapter executes its Python code; it is an explicit alternative to the usual
+controller compilation/release path. It cannot be combined with native,
+headless, release export, `--no-server`, or native report options.
+
+The SDK supplies its versioned, integrity-checked browser runtime in `ui_dir`;
+the project serves its own controller, assets, and inference transport. Adapter
+runs default to loopback and port 0 (choose an available port); adapters must use
+the actual bound port in URLs. Physics still runs in the browser. The SDK has no
+robot models, board addresses, or robot-specific protocol implementation.
+
+Browser-only fixes belong in BotLab's frontend source. Rebuild and distribute
+the browser runtime archive alongside the compatible SDK release; Python SDK
+source does not duplicate TypeScript fixes. For local/offline verification:
+
+```bash
+botlab ui export --botlab /path/to/fixed/BotLab --out /tmp/runtime.zip
+botlab ui fetch --archive /tmp/runtime.zip
+```
+
+These commands use a local build; they do not publish a release. Existing users
+must install the corrected runtime as well as any required CLI changes.

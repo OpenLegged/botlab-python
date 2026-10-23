@@ -22,6 +22,7 @@ robot or policy.
 from __future__ import annotations
 
 import argparse
+import importlib
 import os
 import sys
 import tempfile
@@ -63,9 +64,60 @@ def _set_verbose(args: argparse.Namespace) -> None:
         os.environ["BOTLAB_VERBOSE"] = "1"
 
 
+def _run_browser_adapter(args: argparse.Namespace, project_dir: Path) -> int:
+    from .browser import BrowserRunContext
+
+    if args.native or args.headless or args.out or args.no_server or args.report:
+        raise BotLabError(
+            "--browser-adapter requires a live browser run; it cannot be combined "
+            "with --native, --headless, --out, --no-server, or --report."
+        )
+    module_name, separator, function_name = args.browser_adapter.partition(":")
+    if (not separator or not function_name.isidentifier()
+            or not all(part.isidentifier() for part in module_name.split("."))):
+        raise BotLabError("--browser-adapter must be MODULE:FUNCTION.")
+    if not project_dir.is_dir():
+        raise BotLabError(f"project directory does not exist: {project_dir}")
+    previous_directory = Path.cwd()
+    previous_path = sys.path[:]
+    try:
+        os.chdir(project_dir)
+        sys.path.insert(0, str(project_dir))
+        try:
+            module = importlib.import_module(module_name)
+            adapter = getattr(module, function_name)
+        except (ImportError, AttributeError) as error:
+            raise BotLabError(f"Cannot load browser adapter {args.browser_adapter}: {error}") from error
+        if not callable(adapter):
+            raise BotLabError(f"Browser adapter {args.browser_adapter} is not callable.")
+        context = BrowserRunContext(
+            project_dir=project_dir,
+            ui_dir=ensure_browser_runtime(),
+            host=args.host,
+            port=args.port,
+            open_browser=not args.no_browser,
+            inference_endpoint=args.inference_endpoint,
+        )
+        return adapter(context)
+    finally:
+        sys.path[:] = previous_path
+        os.chdir(previous_directory)
+
+
 def _cmd_run(args: argparse.Namespace) -> int:
     _set_verbose(args)
     project_dir = Path(args.project_dir or ".").resolve()
+    adapter = getattr(args, "browser_adapter", None)
+    target = getattr(args, "hil", None)
+    if target is not None and (adapter or args.native or args.headless or args.out or args.no_server):
+        raise BotLabError("--hil requires the standard live browser run.")
+    args.host = args.host or ("0.0.0.0" if args.native or args.headless else "127.0.0.1")
+    if target is not None and args.host not in ("127.0.0.1", "localhost"):
+        raise BotLabError("HIL requires --host 127.0.0.1 or localhost.")
+    if adapter:
+        return _run_browser_adapter(args, project_dir)
+    if getattr(args, "inference_endpoint", None):
+        raise BotLabError("--inference-endpoint requires --browser-adapter.")
     if args.headless:
         if args.out or args.no_server:
             raise BotLabError("--headless cannot be combined with --out or --no-server.")
@@ -137,6 +189,22 @@ def _cmd_run(args: argparse.Namespace) -> int:
         )
     if args.no_server:
         return 0
+    from .hil import HilHost
+
+    runtime = ensure_browser_runtime()
+    if target is not None:
+        import json
+
+        try:
+            capability = json.loads((runtime / "botlab-capabilities.json").read_text())
+        except (OSError, ValueError):
+            capability = {}
+        if capability.get("hilProtocol") != 1:
+            raise BotLabError("The cached browser runtime does not support HIL v1. Install a matching runtime with `botlab ui fetch --archive <path>`.")
+    try:
+        hil = HilHost(project_dir, selected_target=target) if args.host in ("127.0.0.1", "localhost") else None
+    except ValueError as error:
+        raise BotLabError(str(error)) from error
     serve_project(
         project_dir,
         None,
@@ -144,7 +212,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
         args.port,
         open_browser=not args.no_browser,
         release_provider=provider,
-        ui_dir=ensure_browser_runtime(),
+        ui_dir=runtime,
+        hil=hil,
     )
     return 0
 
@@ -248,6 +317,102 @@ def _cmd_docs(args: argparse.Namespace) -> int:
     return 0
 
 
+def _hil_result(host, result):
+    """Wait for a CLI management job; the browser uses the same operations API."""
+    import time
+    while isinstance(result, dict) and result.get("operation"):
+        operation = result["operation"]
+        if operation["status"] == "failed":
+            raise BotLabError(operation["error"])
+        if operation["status"] == "succeeded":
+            return result.get("result", result)
+        time.sleep(0.2)
+        result = host.handle("GET", "/hil/operations/" + operation["id"])
+    return result
+
+
+def _cmd_target(args: argparse.Namespace) -> int:
+    import json
+    from .hil import HilHost
+
+    with_host = HilHost(Path.cwd())
+    try:
+        action = args.action
+        body = {"target": args.name}
+        if getattr(args, "ask_password", False):
+            import getpass
+            body["password"] = getpass.getpass("SSH password: ")
+        if getattr(args, "host_key", None):
+            body["host_key"] = args.host_key
+        if action == "list":
+            result = with_host.handle("GET", "/hil/state")["targets"]
+        elif action == "discover":
+            result = with_host.handle("POST", "/hil/devices/discover", {
+                "interface": args.interface, "profile": args.profile})
+        elif action == "add":
+            if not args.name or not (args.endpoint or args.ssh_host):
+                raise BotLabError("target add requires NAME and --ssh-host HOST --user USER or --endpoint tcp://host:port")
+            settings = {"id": args.name, "name": args.name, "backend": args.backend}
+            if args.ssh_host:
+                settings.update(transport="ssh", ssh={"host": args.ssh_host, "user": args.user,
+                    "port": args.ssh_port}, root=args.root, profile=args.profile or "generic-linux")
+                if args.identity_file:
+                    settings["ssh"]["identity_file"] = args.identity_file
+                if args.host_key:
+                    settings["ssh"]["host_key"] = args.host_key
+            else:
+                settings["endpoint"] = args.endpoint
+            result = with_host.handle("POST", "/hil/targets", settings)
+        else:
+            if not args.name:
+                raise BotLabError("target " + action + " requires NAME")
+            target = next((t for t in with_host.targets if t["id"] == args.name), None)
+            if action == "remove":
+                result = with_host.handle("POST", "/hil/targets/remove", body)
+            elif action == "provision":
+                result = with_host.handle("POST", "/hil/devices/provision", body)
+            elif action == "identity":
+                result = with_host.handle("POST", "/hil/devices/host-key", body)
+            elif action == "inspect" and target and target.get("transport") == "ssh":
+                result = with_host.handle("POST", "/hil/devices/inspect", body)
+            else:
+                result = _hil_result(with_host, with_host.handle("POST", "/hil/connect", body))
+                if action == "projects":
+                    result = with_host.handle("GET", "/hil/projects")
+        print(json.dumps(_hil_result(with_host, result), ensure_ascii=False, indent=2))
+    except (ValueError, OSError) as error:
+        raise BotLabError(str(error)) from error
+    finally:
+        with_host.close()
+    return 0
+
+
+def _cmd_deploy(args: argparse.Namespace) -> int:
+    import json
+    from .hil import HilHost
+    host = HilHost(Path(args.project_dir or "."))
+    body = {"target": args.target}
+    if args.ask_password:
+        import getpass
+        body["password"] = getpass.getpass("SSH password: ")
+    try:
+        _hil_result(host, host.handle("POST", "/hil/connect", body))
+        _hil_result(host, host.handle("POST", "/hil/build", {}))
+        result = _hil_result(host, host.handle("POST", "/hil/deploy", {}))
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0
+    except (ValueError, OSError) as error:
+        raise BotLabError(str(error)) from error
+    finally:
+        host.close()
+
+
+def _cmd_agent(args: argparse.Namespace) -> int:
+    from .hil.agent import main as agent_main
+
+    return agent_main(args.agent_args)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="botlab",
@@ -280,7 +445,21 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="run natively without a viewer or HTTP server (supports custom Python controllers)",
     )
-    run.add_argument("--host", default="0.0.0.0", help="bind address (default: 0.0.0.0, LAN-reachable)")
+    run.add_argument(
+        "--host", help="bind address (browser default: 127.0.0.1; native: 0.0.0.0)",
+    )
+    run.add_argument(
+        "--hil", metavar="TARGET",
+        help="select a registered HIL target or tcp://host:port in the browser toolbar",
+    )
+    run.add_argument(
+        "--browser-adapter", metavar="MODULE:FUNCTION",
+        help="run a project browser adapter with the SDK-managed web runtime",
+    )
+    run.add_argument(
+        "--inference-endpoint", metavar="HOST:PORT",
+        help="remote inference address passed to the selected browser adapter",
+    )
     run.add_argument("--port", type=int, default=0, help="bind port (default: random free port)")
     run.add_argument(
         "--out",
@@ -333,6 +512,32 @@ def build_parser() -> argparse.ArgumentParser:
     ui.add_argument("--url", help="runtime archive URL override for ui fetch")
     ui.set_defaults(func=_cmd_ui)
 
+    target = subparsers.add_parser("target", help="manage HIL target devices")
+    target.add_argument("action", choices=["list", "add", "inspect", "remove", "discover", "identity", "provision", "projects"])
+    target.add_argument("name", nargs="?")
+    target.add_argument("--endpoint")
+    target.add_argument("--backend", default="onnxruntime")
+    target.add_argument("--ssh-host")
+    target.add_argument("--user")
+    target.add_argument("--ssh-port", type=int, default=22)
+    target.add_argument("--identity-file")
+    target.add_argument("--host-key", help="explicitly trusted SSH SHA256 fingerprint")
+    target.add_argument("--ask-password", action="store_true")
+    target.add_argument("--root", default="~/botlab")
+    target.add_argument("--interface")
+    target.add_argument("--profile", choices=["generic-linux", "rdk-x5"])
+    target.set_defaults(func=_cmd_target)
+
+    deploy = subparsers.add_parser("deploy", help="build and install a HIL application without running it")
+    deploy.add_argument("project_dir", nargs="?")
+    deploy.add_argument("--target", required=True)
+    deploy.add_argument("--ask-password", action="store_true")
+    deploy.set_defaults(func=_cmd_deploy)
+
+    agent = subparsers.add_parser("agent", help="run the target-side HIL agent")
+    agent.add_argument("agent_args", nargs=argparse.REMAINDER)
+    agent.set_defaults(func=_cmd_agent)
+
     docs = subparsers.add_parser(
         "docs",
         help="print where the bundled docs (component reference, decision table, error guide) live",
@@ -343,6 +548,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
     args = build_parser().parse_args(argv)
     try:
         return args.func(args)

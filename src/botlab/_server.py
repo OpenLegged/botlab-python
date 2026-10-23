@@ -24,12 +24,14 @@ from __future__ import annotations
 
 import http.server
 import json
+import secrets
 import socketserver
 import webbrowser
 from collections.abc import Callable
 from pathlib import Path
 
 from ._host import PRESET_FILE_SUFFIX, BotLabError
+from .hil.protocol import error_details
 
 CROSS_ORIGIN_ISOLATION_HEADERS = {
     "Cross-Origin-Opener-Policy": "same-origin",
@@ -81,14 +83,16 @@ def local_project_payload(project_dir: Path) -> dict:
     files = {}
     assets = []
     for child in sorted(project_dir.iterdir()):
-        if child.name in ("release.zip", ".botlab.zip"):
+        if child.name.startswith(".") or child.name in ("release.zip", ".botlab.zip"):
             continue
         if child.is_dir():
-            if child.is_symlink() or child.name in ("__pycache__", "node_modules") or child.name.startswith("."):
+            if child.is_symlink() or child.name in ("__pycache__", "node_modules", "tmp") or child.name.startswith("."):
                 continue
             for item in sorted(child.rglob("*")):
-                if item.is_file():
-                    assets.append(item.relative_to(project_dir).as_posix())
+                relative = item.relative_to(project_dir)
+                if (item.is_file() and not item.is_symlink()
+                        and not any(part.startswith(".") or part in ("__pycache__", "node_modules") for part in relative.parts)):
+                    assets.append(relative.as_posix())
             continue
         relative = child.relative_to(project_dir).as_posix()
         if child.suffix == ".py" or child.name.endswith(PRESET_FILE_SUFFIX):
@@ -122,6 +126,17 @@ class BotlabUIRequestHandler(http.server.SimpleHTTPRequestHandler):
 
     def do_GET(self):
         server = self.server  # type: ignore[attr-defined]
+        if getattr(server, "botlab_hil", None) is not None:
+            if not self._hil_host_allowed():
+                self.send_error(403, "Invalid Host")
+                return
+            path = _request_path(self.path)
+            if path.startswith("hil/"):
+                self._serve_hil("GET", path)
+                return
+            if path in ("", "index.html"):
+                self._serve_hil_index()
+                return
         provider = getattr(server, "botlab_release_provider", None)
         request_path = _request_path(self.path)
         if provider is not None and request_path == "release.zip":
@@ -131,6 +146,70 @@ class BotlabUIRequestHandler(http.server.SimpleHTTPRequestHandler):
             self._serve_local_project()
             return
         super().do_GET()
+
+    def _hil_host_allowed(self) -> bool:
+        return self.headers.get("Host") in self.server.botlab_hil_hosts
+
+    def _hil_json(self, status: int, payload: dict) -> None:
+        data = json.dumps(payload, allow_nan=False).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _serve_hil_index(self) -> None:
+        server = self.server
+        bootstrap = json.dumps({
+            "token": server.botlab_hil_token,
+            "selectedTarget": server.botlab_hil.handle("GET", "/hil/state")["selectedTarget"],
+        }).replace("<", "\\u003c")
+        source = (server.botlab_ui_dir / "index.html").read_text(encoding="utf-8")
+        injection = f"<script>window.BOTLAB_HIL={bootstrap};</script>"
+        source = source.replace("</head>", injection + "</head>") if "</head>" in source else injection + source
+        data = source.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _serve_hil(self, method: str, path: str) -> None:
+        server = self.server
+        token = self.headers.get("X-Botlab-Hil-Token", "")
+        origin = self.headers.get("Origin")
+        if (not self._hil_host_allowed()
+                or not secrets.compare_digest(token, server.botlab_hil_token)
+                or origin is not None and origin not in server.botlab_hil_origins):
+            self.close_connection = True
+            self._hil_json(403, {"error": "HIL requests require the local session token and origin."})
+            return
+        try:
+            body = None
+            if method == "POST":
+                if self.headers.get_content_type() != "application/json":
+                    raise ValueError("Expected application/json")
+                if self.headers.get("Transfer-Encoding"):
+                    raise ValueError("Chunked requests are not supported")
+                size = int(self.headers.get("Content-Length", "0"))
+                if not 0 < size <= 48 * 1024 * 1024:
+                    raise ValueError("Invalid HIL request size")
+                self.connection.settimeout(15)
+                body = json.loads(self.rfile.read(size))
+                if not isinstance(body, dict):
+                    raise ValueError("Expected a JSON object")
+            result = server.botlab_hil.handle(method, "/" + path, body)
+            self._hil_json(200, result)
+        except Exception as error:
+            self.close_connection = True
+            self._hil_json(400, {"error": str(error), **error_details(error)})
+
+    def do_POST(self):
+        path = _request_path(self.path)
+        if getattr(self.server, "botlab_hil", None) is None or not path.startswith("hil/"):
+            self.send_error(404, "Not found")
+            return
+        self._serve_hil("POST", path)
 
     def _serve_local_project(self) -> None:
         server = self.server  # type: ignore[attr-defined]
@@ -174,11 +253,17 @@ class BotlabUIRequestHandler(http.server.SimpleHTTPRequestHandler):
             relative = url_path[len("project/"):]
             root = Path(self.server.botlab_project_dir)  # type: ignore[attr-defined]
             candidate = (root / relative).resolve()
-            if candidate == root or root in candidate.parents:
+            if ((candidate == root or root in candidate.parents)
+                    and not any(part.startswith(".") for part in Path(relative).parts)):
                 return str(candidate)
             self.send_error(403, "Invalid project asset path")
             return ""
-        return str(self.server.botlab_ui_dir / url_path)  # type: ignore[attr-defined]
+        root = Path(self.server.botlab_ui_dir).resolve()
+        candidate = (root / url_path).resolve()
+        if candidate == root or root in candidate.parents:
+            return str(candidate)
+        self.send_error(403, "Invalid UI asset path")
+        return ""
 
     def list_directory(self, path: str):
         self.send_error(403, "Directory listings are disabled")
@@ -257,6 +342,7 @@ def start_project_server(
     *,
     ui_dir: Path | None = None,
     release_provider: Callable[[], bytes] | None = None,
+    hil=None,
 ):
     """Build (but do not serve) the UI server; returns (httpd, base_url)."""
     if (release_zip is None) == (release_provider is None):
@@ -268,6 +354,8 @@ def start_project_server(
             "Run `botlab ui sync --botlab <BotLab checkout>` first."
         )
 
+    if hil is not None and host not in ("127.0.0.1", "localhost"):
+        raise BotLabError("HIL requires --host 127.0.0.1 or localhost.")
     handler = BotlabUIRequestHandler
     handler.directory = str(ui_dir)
     httpd = _run_server(host, port, handler)
@@ -276,6 +364,11 @@ def start_project_server(
     httpd.botlab_release_provider = release_provider  # type: ignore[attr-defined]
     httpd.botlab_project_dir = project_dir.resolve()  # type: ignore[attr-defined]
     bound_host, bound_port = httpd.socket.getsockname()
+    if hil is not None:
+        httpd.botlab_hil = hil
+        httpd.botlab_hil_token = secrets.token_urlsafe(32)
+        httpd.botlab_hil_hosts = {f"127.0.0.1:{bound_port}", f"localhost:{bound_port}"}
+        httpd.botlab_hil_origins = {f"http://{value}" for value in httpd.botlab_hil_hosts}
     displayed_host = "localhost" if bound_host == "0.0.0.0" else bound_host
     return httpd, f"http://{displayed_host}:{bound_port}"
 
@@ -290,6 +383,7 @@ def serve_project(
     ui_dir: Path | None = None,
     release_provider: Callable[[], bytes] | None = None,
     entry: str = "/",
+    hil=None,
 ) -> str:
     httpd, base_url = start_project_server(
         project_dir,
@@ -298,6 +392,7 @@ def serve_project(
         port,
         ui_dir=ui_dir,
         release_provider=release_provider,
+        hil=hil,
     )
     editor_url = f"{base_url}{entry}"
     print_startup_banner(project_dir.name, base_url, entry, host=host)
@@ -308,4 +403,7 @@ def serve_project(
             httpd.serve_forever()
         except KeyboardInterrupt:
             print("\n[botlab] stopped")
+        finally:
+            if hil is not None:
+                hil.close()
     return editor_url

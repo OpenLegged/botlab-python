@@ -14,6 +14,7 @@ import hashlib
 import importlib
 import json
 import sys
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -35,6 +36,10 @@ STANDARD_PYTHON_MAIN = (
 RELEASE_VERSION = 3
 SIMULATION_ENGINE_ABI_VERSION = 1
 MAX_PYTHON_RELEASE_PACKAGE_BYTES = 200 * 1024 * 1024
+
+# Declaration compilation uses process-global host state and imported modules.
+# Browser release requests and asynchronous HIL builds must share this lock.
+PROJECT_LOAD_LOCK = threading.RLock()
 
 # Flat project files a release may carry besides main.py / controller.py.
 SAFE_PROJECT_SUFFIXES = (".py", PRESET_FILE_SUFFIX)
@@ -229,6 +234,11 @@ def _import_controller(project_dir: Path, source_files: dict[str, str]) -> _host
 
 def load_project(project_dir: Path) -> LoadedProject:
     """Apply the project: collect declarations, run main.py, capture the plan."""
+    with PROJECT_LOAD_LOCK:
+        return _load_project(project_dir)
+
+
+def _load_project(project_dir: Path) -> LoadedProject:
     project_dir = project_dir.resolve()
     if not project_dir.is_dir():
         raise BotLabError(f"Project directory does not exist: {project_dir}")

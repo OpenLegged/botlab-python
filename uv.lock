@@ -50,20 +50,29 @@ runtime = [
     { name = "websockets", version = "16.1.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "websockets", version = "17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
 ]
+target = [
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
+    { name = "numpy", version = "2.5.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "onnxruntime", version = "1.23.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "onnxruntime", version = "1.30.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+]
 
 [package.metadata]
 requires-dist = [
     { name = "botlab-python", extras = ["runtime"], marker = "extra == 'dev'" },
     { name = "mujoco", marker = "extra == 'runtime'", specifier = ">=3.2" },
     { name = "numpy", marker = "extra == 'runtime'", specifier = ">=1.24" },
+    { name = "numpy", marker = "extra == 'target'", specifier = ">=1.24" },
     { name = "onnx", marker = "extra == 'dev'", specifier = ">=1.16" },
     { name = "onnxruntime", marker = "extra == 'runtime'", specifier = ">=1.18" },
+    { name = "onnxruntime", marker = "extra == 'target'", specifier = ">=1.18" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6" },
     { name = "websockets", marker = "extra == 'runtime'", specifier = ">=12" },
 ]
-provides-extras = ["runtime", "dev"]
+provides-extras = ["target", "runtime", "dev"]
 
 [[package]]
 name = "colorama"

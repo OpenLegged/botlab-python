@@ -24,7 +24,7 @@ from ._release import create_release_package
 
 # Directories that never describe project source state (caches, VCS, UI
 # snapshot data of other tools).
-_IGNORED_DIRECTORIES = {"__pycache__", "node_modules"}
+_IGNORED_DIRECTORIES = {"__pycache__", "node_modules", "tmp"}
 # Build outputs: writing one must not trigger a debug rebuild.
 _IGNORED_FILES = {"release.zip", ".botlab.zip"}
 
