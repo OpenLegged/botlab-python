@@ -27,6 +27,8 @@ import math
 
 import numpy as np
 
+from .._quat import quat_multiply
+
 _LCG_MULTIPLIER = 1664525
 _LCG_INCREMENT = 1013904223
 _LCG_MODULUS = 2 ** 32
@@ -119,21 +121,6 @@ def _lcg_uniforms(state, count):
     states = terms % modulus
     uniforms = states.astype(np.float64) / float(_LCG_MODULUS)
     return uniforms, int(states[-1])
-
-
-def _quat_multiply(a, b):
-    """Hamilton product of (batch, 4) wxyz quaternions (float64 in/out)."""
-    aw, ax, ay, az = a[:, 0], a[:, 1], a[:, 2], a[:, 3]
-    bw, bx, by, bz = b[:, 0], b[:, 1], b[:, 2], b[:, 3]
-    return np.stack(
-        [
-            aw * bw - ax * bx - ay * by - az * bz,
-            aw * bx + ax * bw + ay * bz - az * by,
-            aw * by - ax * bz + ay * bw + az * bx,
-            aw * bz + ax * by - ay * bx + az * bw,
-        ],
-        axis=1,
-    )
 
 
 def _quat_rotate(quaternion, norm_squared, vectors, inverse):
@@ -559,7 +546,7 @@ class SpatialMathProcessor:
         if operation == "quat_multiply":
             a, _ = quaternion(0, "first quaternion")
             b, _ = quaternion(1, "second quaternion")
-            result = _quat_multiply(a, b)
+            result = quat_multiply(a, b)
         elif operation == "quat_inverse":
             a, norm_squared = quaternion(0, "quaternion")
             conjugate = a * np.array([1.0, -1.0, -1.0, -1.0])
@@ -611,7 +598,7 @@ class SpatialMathProcessor:
             reference, norm_squared = quaternion(1, "reference")
             inverse_reference = reference * np.array([1.0, -1.0, -1.0, -1.0])
             inverse_reference = inverse_reference / norm_squared[:, None]
-            result = _quat_multiply(inverse_reference, orientation)
+            result = quat_multiply(inverse_reference, orientation)
 
         output[:] = result.reshape(-1)
         if not np.isfinite(output).all():

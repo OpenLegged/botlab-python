@@ -529,7 +529,7 @@ class GroupSpyPhysics(SpyPhysics):
         }
 
     def compose_payloads(self, actions):
-        from botlab._runtime._physics import compose_scoped_actions
+        from botlab._runtime._physics_ctrl import compose_scoped_actions
 
         return compose_scoped_actions(self._layouts, actions, self.data.ctrl)
 
@@ -592,6 +592,46 @@ def _declare_two_robots():
         )
 
 
+class ImuSensorsPlanLoadTest(unittest.TestCase):
+    """imuSensors is resolved once at plan load (mujocoPolicyController.parseNode)."""
+
+    def captured(self, robot, flag="absent"):
+        seen = {}
+
+        class Probe(ConstantSource):
+            def init(self, config, input_dims):
+                seen.update(config)
+                ConstantSource.init(self, config, input_dims)
+
+        data = {"values": [1.0]} if flag == "absent" else {"values": [1.0], "imuSensors": flag}
+        plan = {
+            "nodes": [{"id": "c", "type": "obs-constant", "data": data},
+                      {"id": "sink", "type": "out-scope", "data": {}}],
+            "edges": [{"id": "e", "source": "c", "target": "sink"}],
+        }
+        if robot is not None:
+            plan["robot"] = robot
+        session = _host_runtime.LocalRuntimeSession(
+            SpyPhysics(), registry={**FAKE_REGISTRY, "obs-constant": Probe}
+        )
+        self.addCleanup(session.close)
+        session.registerPolicyController(plan)
+        return seen.get("imuSensors")
+
+    def test_missing_field_follows_legacy_g1_rule(self):
+        self.assertIs(self.captured("g1"), True)
+        self.assertIs(self.captured("robot"), False)
+        self.assertIs(self.captured(None), False)
+
+    def test_explicit_field_wins_both_ways(self):
+        self.assertIs(self.captured("g1", False), False)
+        self.assertIs(self.captured("robot", True), True)
+
+    def test_non_boolean_is_an_error(self):
+        with self.assertRaisesRegex(RuntimeError, "imuSensors must be a boolean"):
+            self.captured("robot", "yes")
+
+
 class SessionGroupLoopTest(unittest.TestCase):
     """Native controller group：逐机器人 plan + 组合 payload（对照 TS scoped actions）。"""
 
@@ -651,6 +691,42 @@ class SessionGroupLoopTest(unittest.TestCase):
         self.assertEqual(binding["qposOffset"], 15)
         self.assertEqual(binding["qvelOffset"], 13)
         self.assertEqual(binding["namePrefix"], "r1_")
+
+    def test_group_unresolvable_robot_reference_is_explicit(self):
+        _declare_two_robots()
+        session, _physics = self.make_session()
+        plans = []
+        for rid in ("first", "second"):
+            plan = _group_plan(rid, [1.0, 2.0])
+            plan["nodes"].insert(
+                0, {"id": "obs", "type": "obs-stub", "data": {"dim": 2, "robot": "missing"}}
+            )
+            plan["edges"] = [
+                {"id": "e1", "source": "c", "target": "obs"},
+                {"id": "e2", "source": "obs", "target": "sink"},
+            ]
+            plans.append(plan)
+        with self.assertRaisesRegex(
+            RuntimeError, 'references robot "missing", which has no scene offsets'
+        ):
+            session.registerPolicyController({"version": 1, "controllers": plans})
+
+    def test_group_robot_reference_selects_its_scope(self):
+        _declare_two_robots()
+        session, _physics = self.make_session()
+        plans = []
+        for rid, ref in (("first", None), ("second", "first")):
+            plan = _group_plan(rid, [1.0, 2.0])
+            data = {"dim": 2} if ref is None else {"dim": 2, "robot": ref}
+            plan["nodes"].insert(0, {"id": "obs", "type": "obs-stub", "data": data})
+            plan["edges"] = [
+                {"id": "e1", "source": "c", "target": "obs"},
+                {"id": "e2", "source": "obs", "target": "sink"},
+            ]
+            plans.append(plan)
+        session.registerPolicyController({"version": 1, "controllers": plans})
+        binding = session._groups[1]["executor"].observation_bindings[0]
+        self.assertEqual((binding["qposOffset"], binding["qvelOffset"]), (0, 0))
 
     def test_group_requires_full_coverage(self):
         _declare_two_robots()

@@ -9,6 +9,7 @@ optional joint_names/body_names lists).
 """
 
 import io
+import json
 import math
 import struct
 import unittest
@@ -203,6 +204,23 @@ class DecodeBinTest(unittest.TestCase):
 
 
 class LoadMotionFolderTest(unittest.TestCase):
+    def test_optional_folder_names_metadata(self):
+        files = golden_motion_files()
+        files["metadata.json"] = json.dumps({
+            "body_names": ["pelvis"],
+            "joint_names": [f"joint_{i}" for i in range(DOF)],
+        }).encode()
+        motion = _motion.load_motion_folder(files)
+        self.assertEqual(motion["body_names"], ["pelvis"])
+        self.assertEqual(len(motion["joint_names"]), DOF)
+        self.assertEqual(motion["joint_position"].shape, (FRAMES * DOF,))
+
+    def test_rejects_malformed_folder_names(self):
+        files = golden_motion_files()
+        files["metadata.json"] = b'{"body_names": ["pelvis", "foot"]}'
+        with self.assertRaisesRegex(ValueError, "1 unique non-empty names"):
+            _motion.load_motion_folder(files)
+
     def test_golden_motion_folder(self):
         motion = _motion.load_motion_folder(golden_motion_files(), "inline:golden/motion")
         self.assertEqual(set(motion), BASE_KEYS)

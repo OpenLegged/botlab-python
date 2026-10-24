@@ -21,88 +21,24 @@ import math
 from pathlib import Path
 from typing import Any
 
-DEFAULT_CONTROL_HZ = 50
-DEFAULT_PHYSICS_HZ = 200
-
-RESOURCE_KINDS = frozenset({"robot", "model", "scene", "sensor", "motion", "mesh"})
-MODEL_PROVIDERS = frozenset({"auto", "webgpu", "webnn", "wasm"})
-
-PRESET_FILE_SUFFIX = ".preset.yaml"
-
-# Node types the release validator accepts (SimulationEngine ProcessorRegistry).
-SUPPORTED_NODE_TYPES = frozenset({
-    "obs-qpos", "obs-qvel", "obs-imu", "obs-constant", "obs-base-height",
-    "obs-base-lin-vel", "obs-base-ang-vel", "obs-projected-gravity", "obs-commands",
-    "obs-dof-pos", "obs-dof-vel", "obs-actions", "obs-camera", "obs-mujoco-query",
-    "obs-height-scan",
-    "proc-math", "proc-history", "proc-mux", "proc-demux", "proc-clamp",
-    "proc-reorder", "proc-resize", "proc-reroute", "proc-pd",
-    "proc-motion-reference", "proc-motion-sample", "proc-policy-input",
-    "proc-onehot-index",
-    "proc-action-hook", "proc-delay", "proc-rule-index", "proc-one-hot",
-    "proc-compare", "proc-logic", "proc-where", "proc-state-machine",
-    "proc-phase-clock", "proc-clock", "proc-spatial-math", "proc-signal-math",
-    "proc-signal-noise", "proc-signal-filter", "proc-vector-math",
-    "proc-fsm", "proc-mode-switch", "proc-select",
-    "proc-mode-select", "proc-signal-send", "proc-signal-receive",
-    "model-onnx", "out-action", "out-mujoco", "out-scope", "out-logger",
-    "scene-robot", "scene-terrain",
-})
-
-MOTION_REQUIRED_FILES = (
-    "body_pos_w.bin",
-    "body_quat_w.bin",
-    "body_lin_vel_w.bin",
-    "body_ang_vel_w.bin",
-    "joint_pos.bin",
-    "joint_vel.bin",
-    "fps.bin",
+from ._contract import (  # noqa: F401  (re-exported: external code reads these off the host)
+    DEFAULT_CONTROL_HZ,
+    DEFAULT_PHYSICS_HZ,
+    MODEL_PROVIDERS,
+    MOTION_REQUIRED_FILES,
+    PRESET_FILE_SUFFIX,
+    RESOURCE_KINDS,
+    SUPPORTED_NODE_TYPES,
 )
-
-
-class BotLabError(RuntimeError):
-    """A project failed BotLab's declaration or packaging contract."""
+from ._errors import BotLabError
+from ._json import json_value
+from ._preset_files import _preset_lookup
 
 
 def _text(value: Any, label: str) -> str:
     if not isinstance(value, str) or not value:
         raise BotLabError(f"[botlab] {label} must be a non-empty string")
     return value
-
-
-def _json_value(value: Any, label: str, _stack: frozenset[int] = frozenset()) -> Any:
-    """Normalize a Python declaration value to its JS counterpart.
-
-    Pyodide converts Python ``None`` to JavaScript ``undefined``; inside a
-    declaration mapping it represents JSON ``null``, so it is normalized here
-    before the value is validated. Numbers must be finite; integers are kept
-    as ``int`` so the JSON serialization matches JS integer rendering.
-    """
-    if value is None:
-        return None
-    if isinstance(value, bool) or isinstance(value, str):
-        return value
-    if isinstance(value, int):
-        return value
-    if isinstance(value, float):
-        if not math.isfinite(value):
-            raise BotLabError(f"[botlab] {label} must be finite")
-        if value.is_integer() and abs(value) < 2**31:
-            return int(value)
-        return value
-    if isinstance(value, (list, tuple)):
-        return [_json_value(item, f"{label}[{index}]") for index, item in enumerate(value)]
-    if isinstance(value, dict):
-        if id(value) in _stack:
-            raise BotLabError(f"[botlab] {label} must not contain a cycle")
-        stack = _stack | {id(value)}
-        result = {}
-        for key, item in value.items():
-            if not isinstance(key, str) or not key:
-                raise BotLabError(f"[botlab] {label} keys must be non-empty strings")
-            result[key] = _json_value(item, f"{label}.{key}", stack)
-        return result
-    raise BotLabError(f"[botlab] {label} must be JSON-serializable")
 
 
 def _resource_source(value: Any, label: str) -> str:
@@ -228,7 +164,7 @@ class HostSession:
                 )
         if preset is not None:
             preset = _text(preset, f"{kind} preset")
-        config = _json_value({} if config is None else config, f"{kind} config")
+        config = json_value({} if config is None else config, f"{kind} config")
         if not isinstance(config, dict):
             raise BotLabError(f"[botlab] {kind} config must be a mapping")
 
@@ -272,7 +208,7 @@ class HostSession:
             self._parameters[pid] = _declared_parameter(pid, value)
 
     def register_policy_controller(self, plan, modifier=None):
-        self._policy_controller_plan = _json_value(plan, "policy controller plan")
+        self._policy_controller_plan = json_value(plan, "policy controller plan")
         self._plan_has_modifier = modifier is not None
 
     # -- SDK runtime queries --------------------------------------------------
@@ -495,8 +431,6 @@ class _ProjectStateView:
         self.directory = None
 
     def reset(self, directory=None):
-        from ._project import _preset_lookup
-
         end_project_declaration()
         self.directory = directory
         if directory is not None:

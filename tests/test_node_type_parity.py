@@ -9,8 +9,16 @@ tests parse the TypeScript registry directly and compare it against
 
 The BotLab repository is looked up next to this repository (the monorepo
 layout ``<workspace>/botlab-python`` + ``<workspace>/BotLab``) or through
-``BOTLAB_ENGINE_REPO``; without it the parity test skips — the parser itself
-stays covered by the inline-snippet unit tests below.
+``BOTLAB_ENGINE_REPO``; without it the parity test skips locally — the parser
+itself stays covered by the inline-snippet unit tests below. With
+``BOTLAB_REQUIRE_ENGINE_REPO=1`` a missing repository is a hard failure.
+.github/workflows/ci.yml does not check out BotLab (it is a separate private
+repository), so CI currently skips this test and does not set the variable;
+set it once the workflow checks the engine repo out.
+
+``test_whitelist_matches_local_processor_registries`` is the in-repo
+counterpart: it needs no engine checkout and pins the whitelist to what the
+native runtime's registries actually execute.
 """
 
 from __future__ import annotations
@@ -76,7 +84,10 @@ def parse_processor_registry(source: str, symbol_resolver) -> set[str]:
 def test_registry_keys_match_the_offline_whitelist():
     repository = _engine_repository()
     if repository is None:
-        pytest.skip("BotLab engine repository not found (set BOTLAB_ENGINE_REPO to enable)")
+        message = "BotLab engine repository not found (set BOTLAB_ENGINE_REPO)"
+        if os.environ.get("BOTLAB_REQUIRE_ENGINE_REPO") == "1":
+            pytest.fail(message + "; BOTLAB_REQUIRE_ENGINE_REPO=1 forbids skipping")
+        pytest.skip(message)
     engine_source = (
         repository / "src" / "domain" / "runtime" / "engine" / "SimulationEngine.ts"
     ).read_text(encoding="utf-8")
@@ -124,3 +135,17 @@ const ProcessorRegistry: Record<string, new () => INodeProcessor> = {
 def test_parser_requires_a_registry_literal():
     with pytest.raises(AssertionError, match="not found"):
         parse_processor_registry("export const nothing = 1;", lambda symbol: symbol)
+
+
+# Node types the whitelist accepts that no local registry executes. Empty today;
+# add an entry (with the reason) only for types validated but run elsewhere.
+_ACCEPTED_BUT_NOT_EXECUTED: frozenset[str] = frozenset()
+
+
+def test_whitelist_matches_local_processor_registries():
+    pytest.importorskip("numpy")
+    from botlab._runtime._processors import build_registry
+
+    executed = set(build_registry())
+    whitelist = set(_host.SUPPORTED_NODE_TYPES)
+    assert whitelist - _ACCEPTED_BUT_NOT_EXECUTED == executed

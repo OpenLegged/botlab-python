@@ -19,7 +19,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from ._debug import DebugReleaseProvider, _project_signature, build_debug_release
-from ._host import BotLabError
+from ._errors import BotLabError
 from ._server import start_project_server, ui_snapshot_dir
 
 _DISPLAY_READY_MARKER = "display ready: "

@@ -15,7 +15,8 @@ import json
 import zipfile
 from pathlib import Path
 
-from ._host import MOTION_REQUIRED_FILES, BotLabError
+from ._contract import MOTION_REQUIRED_FILES
+from ._errors import BotLabError
 from ._project import MAX_PYTHON_RELEASE_PACKAGE_BYTES, LoadedProject
 
 ASSET_FOLDERS = {
@@ -143,7 +144,10 @@ def _pack_resource(project_dir: Path, resource: dict, used: set[str]) -> list[di
             })
             return entries
         base = resource["source"].rstrip("/")
-        for required in MOTION_REQUIRED_FILES:
+        names = list(MOTION_REQUIRED_FILES)
+        if (project_dir / base / "metadata.json").is_file():
+            names.append("metadata.json")
+        for required in names:
             try:
                 data = read_file(f"{base}/{required}")
             except BotLabError as error:
@@ -156,7 +160,7 @@ def _pack_resource(project_dir: Path, resource: dict, used: set[str]) -> list[di
                 "resourceId": resource["id"],
                 "path": _asset_path(role, resource["id"], required, used),
                 "name": required,
-                "mimeType": "application/octet-stream",
+                "mimeType": "application/json" if required == "metadata.json" else "application/octet-stream",
                 "role": role,
                 "integrity": _sha256_integrity(data),
                 "_buffer": data,

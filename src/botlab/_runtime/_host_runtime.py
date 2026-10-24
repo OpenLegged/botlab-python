@@ -16,6 +16,39 @@ import os
 from ..sdk._runtime_types import Frame
 
 
+def _observation_robot_reference(data):
+    """Explicit robot reference of an observation node; None means "no reference"."""
+    robot = (data or {}).get("robot")
+    if not isinstance(robot, str) or robot in ("", "auto"):
+        return None
+    return robot
+
+
+def _with_imu_sensors(nodes, robot_id):
+    """Write ``imuSensors`` on every observation node (mujocoPolicyController.parseNode).
+
+    Plans that predate the field preferred IMU sensors exactly when the plan's
+    robot resource id was "g1"; absence keeps that, resolved once here.
+    """
+    resolved = []
+    for node in nodes:
+        node_type = node.get("type")
+        if not (isinstance(node_type, str) and node_type.startswith("obs-")):
+            resolved.append(node)
+            continue
+        data = node.get("data") or {}
+        flag = data.get("imuSensors")
+        if flag is not None and not isinstance(flag, bool):
+            raise RuntimeError(
+                f'[botlab] PolicyController observation node "{node.get("id")}" '
+                "imuSensors must be a boolean"
+            )
+        if flag is None:
+            flag = robot_id == "g1"
+        resolved.append(dict(node, data=dict(data, imuSensors=flag)))
+    return resolved
+
+
 class PooledModelRuntime:
     """predictModel backing for custom controllers: shared ONNX session pool.
 
@@ -147,6 +180,7 @@ class LocalRuntimeSession:
         executor = PlanExecutor(registry)
         nodes = self._resolve_plan_references(plan["nodes"])
         edges = self._resolve_plan_references(plan["edges"])
+        nodes = _with_imu_sensors(nodes, plan.get("robot"))
         nodes = self._inject_motion_data(nodes)
         self._resolve_model_paths(nodes)
         executor.compile(nodes, edges)
@@ -163,6 +197,7 @@ class LocalRuntimeSession:
         executor = PlanExecutor(registry)
         nodes = self._resolve_plan_references(sub_plan["nodes"])
         edges = self._resolve_plan_references(sub_plan["edges"])
+        nodes = _with_imu_sensors(nodes, sub_plan.get("robot"))
         nodes = self._inject_motion_data(nodes)
         self._resolve_model_paths(nodes)
         executor.compile(nodes, edges)
@@ -215,8 +250,19 @@ class LocalRuntimeSession:
         try:
             for sub_plan, robot_id in zip(controllers, plan_robot_ids, strict=True):
                 executor, nodes = self._compile_sub_plan(registry, sub_plan)
-                scope = self._physics.robot_scope(robot_id)
                 for binding in executor.observation_bindings:
+                    # An explicit robot reference must name a declared robot
+                    # (SimulationEngine.compile); no reference reads this
+                    # sub-plan's own robot.
+                    reference = _observation_robot_reference(binding["data"])
+                    if reference is not None and reference not in declared:
+                        raise RuntimeError(
+                            f'[SimulationEngine] observation node "{binding["nodeId"]}" '
+                            f'references robot "{reference}", which has no scene offsets'
+                        )
+                    scope = self._physics.robot_scope(
+                        robot_id if reference is None else reference
+                    )
                     binding["qposOffset"] = scope["qpos_start"]
                     binding["qvelOffset"] = scope["qvel_start"]
                     binding["namePrefix"] = scope["name_prefix"]
@@ -414,7 +460,7 @@ class LocalRuntimeSession:
     def readMujoco(self, robot_id, query, target=None, start=None, length=None):
         return self._physics.read_mujoco(robot_id, query, target, start, length)
 
-    def loadMotion(self, motion_id):
+    async def loadMotion(self, motion_id):
         return self._physics.load_motion(motion_id)
 
     def updateHeightfield(self, terrain_id, heights):

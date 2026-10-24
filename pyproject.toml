@@ -91,6 +91,7 @@ ignore = [
 # execution contract. Existing positional zip behavior is retained on migration.
 "src/botlab/_runtime/_motion.py" = ["B905"]
 "src/botlab/_runtime/_physics.py" = ["B007", "B905"]
+"src/botlab/_runtime/_physics_ctrl.py" = ["B007", "B905"]
 "src/botlab/_runtime/_executor.py" = ["B007"]
 "src/botlab/_runtime/_processors/_math.py" = ["B905"]
 "src/botlab/_runtime/_processors/_model.py" = ["B905"]

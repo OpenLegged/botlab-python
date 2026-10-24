@@ -77,3 +77,47 @@ def test_docs_prints_bundled_docs_location(capsys):
     assert "component-reference.md" in out
     assert "decision-table.md" in out
     assert "error-guide.md" in out
+
+
+@pytest.mark.parametrize(
+    "flags, message",
+    [
+        (["--headless", "--out", "x.zip"], "--headless cannot be combined"),
+        (["--headless", "--no-server"], "--headless cannot be combined"),
+        (["--out", "x.zip", "--report", "r.json"], "not --out"),
+        (["--report", "r.json"], "not the editor debug loop"),
+    ],
+)
+def test_run_rejects_conflicting_options(project_dir, capsys, flags, message):
+    assert main(["run", str(project_dir), *flags]) == 2
+    assert message in capsys.readouterr().err
+
+
+def test_main_reports_oserror_subclasses_without_traceback(project_dir, capsys, monkeypatch):
+    def deny(*_args, **_kwargs):
+        raise PermissionError("denied")
+
+    monkeypatch.setattr("botlab._cli.create_release_package", deny)
+    assert main(["validate", str(project_dir)]) == 2
+    assert capsys.readouterr().err == "botlab: error: denied\n"
+
+
+@pytest.mark.parametrize("action", ["sync", "export"])
+def test_ui_requires_botlab_checkout(action, capsys, monkeypatch):
+    monkeypatch.delenv("BOTLAB_REPO", raising=False)
+    args = ["ui", action] + (["--out", "a.zip"] if action == "export" else [])
+    assert main(args) == 2
+    assert "BOTLAB_REPO" in capsys.readouterr().err
+
+
+def test_ui_reads_checkout_from_env(tmp_path, capsys, monkeypatch):
+    monkeypatch.setenv("BOTLAB_REPO", str(tmp_path / "missing"))
+    seen = {}
+
+    def fake_export(checkout, archive):
+        seen["checkout"] = checkout
+        return 0
+
+    monkeypatch.setattr("botlab._cli.export_browser_runtime", fake_export)
+    assert main(["ui", "export", "--out", str(tmp_path / "a.zip")]) == 0
+    assert seen["checkout"] == (tmp_path / "missing").resolve()

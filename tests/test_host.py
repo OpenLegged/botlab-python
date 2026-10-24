@@ -6,6 +6,7 @@ import pytest
 
 from botlab import _host
 from botlab._host import BotLabError
+from botlab._json import json_value
 
 
 @pytest.fixture()
@@ -121,7 +122,7 @@ def test_declaration_channel_closes_after_finish(session):
 
 def test_json_value_normalizes_integer_floats_and_rejects_nan():
     with pytest.raises(BotLabError, match="finite"):
-        _host._json_value(float("nan"), "x")
-    assert _host._json_value(1.0, "x") == 1
-    assert isinstance(_host._json_value(1.0, "x"), int)
-    assert _host._json_value({"b": 1, "a": [True, None]}, "x") == {"a": [True, None], "b": 1}
+        json_value(float("nan"), "x")
+    assert json_value(1.0, "x") == 1
+    assert isinstance(json_value(1.0, "x"), int)
+    assert json_value({"b": 1, "a": [True, None]}, "x") == {"a": [True, None], "b": 1}

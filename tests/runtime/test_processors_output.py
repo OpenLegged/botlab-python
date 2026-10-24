@@ -10,7 +10,10 @@ import unittest
 
 import numpy as np  # noqa: E402
 
-from botlab._runtime._processors import _output  # noqa: E402
+from botlab._runtime._processors import (
+    _motion_reference,  # noqa: E402
+    _output,  # noqa: E402
+)
 
 TOLERANCE = {"rtol": 1e-6, "atol": 1e-6}
 
@@ -746,7 +749,7 @@ class MotionReferenceProcessorTest(unittest.TestCase):
 
         processor.compute([])
         output = processor.output_buffers[0]
-        self.assertEqual(len(output), _output.MOTION_REFERENCE_DIM)
+        self.assertEqual(len(output), _motion_reference.MOTION_REFERENCE_DIM)
         np.testing.assert_allclose(
             output[0:29], 100.0 + np.arange(29), **TOLERANCE
         )

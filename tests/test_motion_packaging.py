@@ -98,6 +98,23 @@ def test_bin_folder_motion_still_packages_seven_files(tmp_path: Path):
     assert names == set(MOTION_REQUIRED_FILES)
 
 
+def test_bin_folder_motion_packages_optional_names_metadata(tmp_path: Path):
+    folder = tmp_path / "assets" / "motions" / "demos"
+    folder.mkdir(parents=True)
+    for name in MOTION_REQUIRED_FILES:
+        (folder / name).write_bytes(b"\x00" * 24)
+    metadata = b'{"body_names":["pelvis"],"joint_names":["hip"]}'
+    (folder / "metadata.json").write_bytes(metadata)
+    project = load_project(_motion_project(tmp_path, "assets/motions/demos"))
+    archive = zipfile.ZipFile(io.BytesIO(create_release_package(project)))
+    config = json.loads(archive.read("release.json"))
+    entries = [entry for entry in config["assets"] if entry["role"] == "motion"]
+    assert {entry["name"] for entry in entries} == {*MOTION_REQUIRED_FILES, "metadata.json"}
+    entry = next(entry for entry in entries if entry["name"] == "metadata.json")
+    assert archive.read(entry["path"]) == metadata
+    assert entry["mimeType"] == "application/json"
+
+
 def test_missing_folder_files_error_mentions_npz(tmp_path: Path):
     (tmp_path / "assets" / "motions" / "demos").mkdir(parents=True)
     project = load_project(_motion_project(tmp_path, "assets/motions/demos"))
