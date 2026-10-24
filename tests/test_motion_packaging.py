@@ -144,3 +144,33 @@ def test_source_file_name_strips_url_extras(source: str, expected: str):
     from botlab._release import _source_file_name
 
     assert _source_file_name({"id": "motion-1", "source": source}, "motion") == expected
+
+
+@pytest.mark.parametrize(('keyword', 'expected'), [('', False), (', preview=False', False), (', preview=True', True)])
+def test_motion_preview_survives_compile_and_release(tmp_path: Path, keyword: str, expected: bool):
+    """Offline plans must use the editor's explicit preview contract, not legacy fallback."""
+    motion_dir = tmp_path / 'assets/motions'
+    motion_dir.mkdir(parents=True)
+    write_motion_npz(motion_dir / 'demos.npz')
+    project_dir = _motion_project(tmp_path, 'assets/motions/demos.npz')
+    source = (project_dir / 'controller.py').read_text()
+    source = source.replace('Robot, concat, project', 'Robot, concat, project, clock')
+    source = source.replace(
+        'control = robot.default_angles + robot.action_scale * action[robot.motor_order]',
+        "control = motion.sample(clock(), channel='joint_position', indices=[0, 1, 2]" + keyword + ').action()',
+    )
+    (project_dir / 'controller.py').write_text(source)
+    package = create_release_package(load_project(project_dir))
+    with zipfile.ZipFile(io.BytesIO(package)) as archive:
+        plan = json.loads(archive.read('release.json'))['project']['compiledController']['plan']
+    samples = [node for node in plan['nodes'] if node['type'] == 'proc-motion-sample']
+    assert len(samples) == 1
+    assert samples[0]['data']['preview'] is expected
+
+
+def test_motion_preview_rejects_non_boolean():
+    from botlab import Motion, clock
+
+    motion = Motion._from_id('reference.npz')
+    with pytest.raises(TypeError, match='preview must be a boolean'):
+        motion.sample(clock(), channel='joint_position', indices=[0], preview=1)
