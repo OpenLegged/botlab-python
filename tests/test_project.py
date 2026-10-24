@@ -298,3 +298,17 @@ Object.fromEntries(Object.keys(v).sort().map(k=>[k,c(v[k])])):v;
 process.stdout.write(JSON.stringify(c(JSON.parse(fs.readFileSync(0,'utf8')))));
 '''], input=json.dumps(payload).encode()).decode()
     assert canonical_json(payload) == expected
+
+
+def test_public_angular_velocity_marks_body_frame(project_dir: Path):
+    controller = project_dir / "controller.py"
+    controller.write_text(
+        CONTROLLER.replace("robot.projected_gravity()", "robot.base_angular_velocity()"),
+        encoding="utf-8",
+    )
+    project = load_project(project_dir)
+    angular_nodes = [
+        node for node in project.compiled_plan["nodes"] if node["type"] == "obs-base-ang-vel"
+    ]
+    assert len(angular_nodes) == 1
+    assert angular_nodes[0]["data"]["rootAngularVelocityFrame"] == "body"

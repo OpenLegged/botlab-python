@@ -371,8 +371,18 @@ class RotatedStateTest(unittest.TestCase):
     def test_obs_base_ang_vel_preserves_body_local_root_qvel(self):
         # MuJoCo free-joint angular qvel is already body-local, unlike translation.
         np.testing.assert_allclose(
-            self.value("obs-base-ang-vel"), [0.1, 0, 0], atol=1e-6
+            self.value("obs-base-ang-vel", {"rootAngularVelocityFrame": "body"}),
+            [0.1, 0, 0], atol=1e-6
         )
+
+    def test_unmarked_plan_preserves_legacy_angular_velocity(self):
+        np.testing.assert_allclose(
+            self.value("obs-base-ang-vel"), [0, -0.1, 0], atol=1e-6
+        )
+
+    def test_rejects_unsupported_angular_velocity_frame(self):
+        with self.assertRaisesRegex(ValueError, "rootAngularVelocityFrame must be body"):
+            self.value("obs-base-ang-vel", {"rootAngularVelocityFrame": "world"})
 
     def test_root_angular_velocity_matches_mujoco_local_object_velocity(self):
         for quat in ([HALF_SQRT2, 0, 0, HALF_SQRT2], [0.5, 0.5, 0.5, 0.5]):
@@ -385,12 +395,12 @@ class RotatedStateTest(unittest.TestCase):
                     model, data, mujoco.mjtObj.mjOBJ_BODY, 1, velocity, 1
                 )
                 root = obs.get_mujoco_observation(
-                    "obs-base-ang-vel", context(model, data, {"velocitySource": "root"})
+                    "obs-base-ang-vel", context(model, data, {"velocitySource": "root", "rootAngularVelocityFrame": "body"})
                 )
                 np.testing.assert_allclose(root, velocity[:3], atol=1e-6)
                 np.testing.assert_allclose(root, data.sensordata[4:7], atol=1e-6)
                 imu = obs.get_mujoco_observation(
-                    "obs-imu", context(model, data, {"velocitySource": "root"})
+                    "obs-imu", context(model, data, {"velocitySource": "root", "rootAngularVelocityFrame": "body"})
                 )
                 np.testing.assert_allclose(imu[4:], velocity[:3], atol=1e-6)
 
