@@ -423,7 +423,11 @@ BOTLAB_HIL_TOKEN=<token> botlab run --hil desk-x5
 
 Rules: `ws://` endpoints are loopback-only; remote gateways must be `wss://`
 (private CA via `BOTLAB_HIL_CA_BUNDLE`, verification never disabled). The token
-is never stored in target settings and never passed as a CLI argument. One
+is never stored in target settings and never passed as a CLI argument. Native
+clients send it in the `Authorization` header; browsers, which cannot set
+handshake headers, send the same credential as one leading text control frame
+`{"type": "gateway-auth", "token": ...}` before the binary relay begins (any
+text frame after that is still a protocol error). One
 agent per device (re-registration takes over, closing the displaced pairing —
 device restart discards stale sessions), one coordinator per device (a second
 gets `device busy`), and either side dropping releases the HIL lease exactly

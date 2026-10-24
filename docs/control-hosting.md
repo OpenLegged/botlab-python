@@ -128,9 +128,12 @@ board never needs an inbound port:
   dialed out (`/agent/<id>`). It never parses HIL frames. One shared bearer
   token (operator channel, generated at startup or via
   `BOTLAB_HIL_GATEWAY_TOKEN`, revealed with `--print-token`); there is no
-  tokenless mode. `ws://` is loopback-dev only; remote gateways are `wss://`
-  (direct via `--tls-cert/--tls-key` or a TLS reverse proxy). Compression is
-  off and links dial directly (no ambient system proxy).
+  tokenless mode. Native clients present it in the `Authorization` header;
+  browsers cannot set handshake headers, so they send the same credential as
+  one leading `{"type": "gateway-auth", "token": ...}` text control frame
+  before the binary relay begins. `ws://` is loopback-dev only; remote gateways
+  are `wss://` (direct via `--tls-cert/--tls-key` or a TLS reverse proxy).
+  Compression is off and links dial directly (no ambient system proxy).
 - **Agent** (`botlab-agent connect --gateway wss://… --device <id>`):
   registers, serves the same dispatch loop as TCP mode, and redials after
   lease termination or link loss (`--retry-interval`, default 5 s). The token

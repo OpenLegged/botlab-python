@@ -4,8 +4,11 @@ local coordinator and resident board agents that dial out.
 The gateway never parses HIL frames — pairing and byte relay only — so the
 inference path inherits no Control-command semantics: no receipts, no retry,
 no task table. There is exactly one shared bearer token (operator channel,
-same restricted-credential stance as Control M1) and no tokenless mode;
-``ws://`` is for loopback development, remote gateways must use ``wss://``.
+same restricted-credential stance as Control M1) and no tokenless mode; it
+arrives in the ``Authorization`` header or, for browsers that cannot set
+handshake headers, as one leading ``{"type": "gateway-auth", "token": ...}``
+text control frame. ``ws://`` is for loopback development, remote gateways
+must use ``wss://``.
 
 Pairing rules:
 - one agent per device ID: a re-registration takes over and closes the old
@@ -16,6 +19,7 @@ Pairing rules:
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import secrets
 import ssl
@@ -26,6 +30,7 @@ from pathlib import Path
 from .protocol import MAX_FRAME_BYTES, HilError
 
 RECV_TIMEOUT = 600
+AUTH_TIMEOUT = 5
 
 
 def _parse_path(path: str) -> tuple[str, str] | None:
@@ -60,12 +65,44 @@ class Gateway:
         channel, device = route
         header = websocket.request.headers.get("Authorization", "")
         if not secrets.compare_digest(header, f"Bearer {self.token}"):
-            websocket.close(1008, "invalid gateway token")
-            return
+            # Browsers cannot set Authorization headers on a WebSocket
+            # handshake; the same credential may arrive as one leading text
+            # control frame instead.
+            if not self._frame_auth(websocket):
+                return
         if channel == "agent":
             self._agent(websocket, device)
         else:
             self._device(websocket, device)
+
+    def _frame_auth(self, websocket) -> bool:
+        """Authenticate a header-less client (the browser) with one text frame.
+
+        The frame is gateway control traffic, not an HIL frame — the relay
+        itself still never parses HIL traffic, and any text frame after
+        authentication remains a protocol error exactly as before.
+        """
+        try:
+            message = websocket.recv(timeout=AUTH_TIMEOUT)
+        except TimeoutError:
+            websocket.close(1008, "gateway authentication timeout")
+            return False
+        except Exception:
+            return False
+        token = None
+        if isinstance(message, str):
+            try:
+                frame = json.loads(message)
+            except ValueError:
+                frame = None
+            if isinstance(frame, dict) and frame.get("type") == "gateway-auth" \
+                    and isinstance(frame.get("token"), str):
+                token = frame["token"]
+        if token is None or not secrets.compare_digest(
+                token.encode("utf-8"), self.token.encode("utf-8")):
+            websocket.close(1008, "invalid gateway token")
+            return False
+        return True
 
     # -- registration -------------------------------------------------------
 

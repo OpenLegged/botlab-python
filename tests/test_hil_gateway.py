@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 import shutil
 import ssl
 import subprocess
@@ -27,6 +28,7 @@ from botlab.hil.targets import save_target
 from botlab.hil.wsstream import WebSocketStream, connect_gateway
 
 pytest.importorskip("websockets")
+from websockets.exceptions import ConnectionClosed  # noqa: E402
 from websockets.sync.client import connect as ws_connect  # noqa: E402
 from websockets.sync.server import serve as ws_serve  # noqa: E402
 
@@ -227,6 +229,81 @@ def test_gateway_bad_token(gateway, tmp_path, monkeypatch):
             host.handle("POST", "/hil/connect", {"target": "gw"})
     finally:
         host.close()
+
+
+def dial_unauthenticated(endpoint: str, device: str = DEVICE):
+    """Browser-shaped dial: no Authorization header can be set on a WebSocket
+    handshake, so the credential must travel in a leading text frame."""
+    return ws_connect(f"{endpoint}/device/{device}", open_timeout=5,
+                      max_size=64 * 1024 * 1024, legacy=True)
+
+
+def expect_close(raw) -> tuple[int, str]:
+    with pytest.raises(ConnectionClosed) as exc:
+        raw.recv(timeout=5)
+    close = exc.value.rcvd
+    assert close is not None, "peer closed without a close frame"
+    return close.code, close.reason
+
+
+def test_gateway_text_frame_auth(board, gateway):
+    """The browser coordinator authenticates with one gateway-auth text frame,
+    then runs the full device-chain flow unchanged."""
+    endpoint, _ = gateway
+    raw = dial_unauthenticated(endpoint)
+    raw.send(json.dumps({"type": "gateway-auth", "token": TOKEN}))
+    stream = WebSocketStream(raw)
+    try:
+        send(stream, {"op": "hello"})
+        assert receive(stream)["ok"] is True
+        send(stream, {"op": "start"})
+        session = receive(stream)["session"]
+        content = b"echo-model-bytes"
+        digest = hashlib.sha256(content).hexdigest()
+        send(stream, {"op": "load", "session": session, "sha256": digest,
+                      "data": base64.b64encode(content).decode()})
+        assert receive(stream)["ok"] is True
+        send(stream, {"op": "infer", "session": session, "seq": 0, "model": digest,
+                      "inputs": {"x": {"dtype": "float32", "shape": [2], "data": [1.0, 2.5]}}})
+        assert receive(stream)["outputs"]["x"]["data"] == [2.0, 5.0]
+    finally:
+        stream.close()
+
+
+def test_gateway_text_frame_auth_bad_token(gateway):
+    endpoint, _ = gateway
+    raw = dial_unauthenticated(endpoint)
+    raw.send(json.dumps({"type": "gateway-auth", "token": "not-the-token"}))
+    assert expect_close(raw) == (1008, "invalid gateway token")
+
+
+def test_gateway_text_frame_auth_malformed(gateway):
+    endpoint, _ = gateway
+    raw = dial_unauthenticated(endpoint)
+    raw.send("not json at all")
+    assert expect_close(raw) == (1008, "invalid gateway token")
+
+
+def test_gateway_text_frame_auth_timeout(gateway, monkeypatch):
+    monkeypatch.setattr("botlab.hil.gateway.AUTH_TIMEOUT", 0.2)
+    endpoint, _ = gateway
+    raw = dial_unauthenticated(endpoint)
+    assert expect_close(raw) == (1008, "gateway authentication timeout")
+
+
+def test_gateway_text_after_auth_still_rejected(board, gateway):
+    """The gateway-auth frame is control traffic, not an HIL frame: once
+    authenticated, text frames remain a protocol error exactly as before."""
+    endpoint, _ = gateway
+    stream = dial(endpoint)
+    try:
+        send(stream, {"op": "hello"})
+        assert receive(stream)["ok"] is True
+        stream.websocket.send("a second text frame")
+        with pytest.raises(OSError):
+            receive(stream)
+    finally:
+        stream.close()
 
 
 def test_gateway_missing_token_refused_before_dial(board, tmp_path, monkeypatch):
