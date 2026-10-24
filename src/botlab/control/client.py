@@ -28,6 +28,37 @@ from .protocol import (
 from .receipts import Receipts
 
 
+def agent_prompt(project: str) -> str:
+    """Ready-to-paste instructions for the user's AI assistant.
+
+    Assumes the environment is already prepared — botlab-python installed and
+    the project middleware running — because this string only ships from a
+    live, discovered middleware. The pairing token is deliberately absent:
+    it is surfaced separately by `connection --show-token` and must never be
+    embedded in prompts, command lines or logs.
+    """
+    return (
+        "你通过 BotLab Control CLI 操控一个正在运行的浏览器仿真。环境已就绪：botlab-python 已安装，"
+        "项目中间件正在运行，无需安装任何东西。\n"
+        "\n"
+        f"工作目录：{project}\n"
+        "在其他目录调用时，为每条命令加 --project 指向该目录。\n"
+        "\n"
+        "先核实链路（应看到 connected 与 external_enabled 为 true、run_state 为 running、ready 为 true）：\n"
+        "botlab control --project . state --json\n"
+        "\n"
+        "控制规则：\n"
+        "1. 每个动作：读 state → 发命令 → wait --id 直到 terminal:true → 核对物理反馈，再发下一条。\n"
+        "2. 工具输出解析失败不等于命令未执行：先查 state 的 active_command_id，确认未接受后才可重发。\n"
+        "3. 参数按 capabilities 声明的范围发送；定时移动不是精确导航，实际效果以位置与姿态反馈为准。\n"
+        "4. 网络超时只表示结果未知：先 wait 原请求，必要时对同一 request-id 显式 retry；新的运动决定用新 ID。\n"
+        "5. 页面隐藏或仿真暂停时 ready=false，动作会被拒绝；恢复后从当前位置继续，旧动作不会自动重放。\n"
+        "6. 项目若有 CONTROL_EXPERIENCE.md 或 AGENTS.md 等控制经验/说明文件，先读再动。\n"
+        "\n"
+        "现在：读取状态并汇报当前姿态，然后等待用户指令。"
+    )
+
+
 class _NoRedirects(HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         return None
@@ -157,7 +188,8 @@ class ControlClient:
         with os.fdopen(fd, "w") as stream:
             json.dump(descriptor, stream)
         return {"ok": True, **public_descriptor(descriptor), "websocket": descriptor["websocket"],
-                "pairing": "Remote middleware enrolled; identity pinned to this project."}
+                "pairing": "Remote middleware enrolled; identity pinned to this project.",
+                "agent_prompt": agent_prompt(descriptor["project"])}
 
     def select(self) -> dict:
         if self._selected is not None:
@@ -209,7 +241,8 @@ class ControlClient:
     def connection(self, show_token: bool = False) -> dict:
         descriptor = self.select()
         result = {"ok": True, **public_descriptor(descriptor), "websocket": descriptor.get("websocket"),
-                  "pairing": "Open the project's runtime, pair with this middleware, then enable external control."}
+                  "pairing": "Open the project's runtime, pair with this middleware, then enable external control.",
+                  "agent_prompt": agent_prompt(descriptor["project"])}
         if show_token:
             result["token"] = descriptor["token"]
         return result
