@@ -22,6 +22,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Setup Node for cross-language digest tests
+        uses: actions/setup-node@v7
+        with:
+          # Keep aligned with OpenLegged/BotLab's .nvmrc.
+          node-version: '24.21.0'
+
       - name: Set up uv with Python ${{ matrix.python-version }}
         uses: astral-sh/setup-uv@v5
         with:
