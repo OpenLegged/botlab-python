@@ -249,3 +249,52 @@ def test_modify_hook_project_travels_as_sources(tmp_path: Path):
     assert "project/controller.py" in archive.namelist()
     # digest still covers manifest + sources
     assert config["project"]["projectDigest"] == project.project_digest
+
+
+def test_named_robot_sensor_identity_is_not_an_asset_path(project_dir):
+    controller = CONTROLLER.replace('Robot("assets/robot/scene.xml",', 'Robot("assets/robot/scene.xml", name="G1",')
+    controller += '\nfrom botlab import Sensor\ncamera = Sensor(robot, name="Depth", config={"outputMode": "depth"})\n'
+    (project_dir / 'controller.py').write_text(controller)
+    loaded = load_project(project_dir)
+    sensor = next(r for r in loaded.manifest['resources'] if r['kind'] == 'sensor')
+    assert sensor['source'] == 'G1'
+    assert loaded.compiled_plan['robot'] == 'G1'
+    assert 'G1' not in loaded.asset_paths
+    assert 'assets/robot/scene.xml' in loaded.asset_paths
+    create_release_package(loaded)
+
+
+def test_sensor_requires_robot_reference(project_dir):
+    (project_dir / 'controller.py').write_text(CONTROLLER + '\nfrom botlab import Sensor\ncamera = Sensor("missing", name="Depth")\n')
+    with pytest.raises(BotLabError, match='must reference a declared robot'):
+        load_project(project_dir)
+
+
+def test_project_collects_mjcf_sibling_assets(project_dir):
+    shared = project_dir / 'assets/shared'
+    shared.mkdir()
+    (shared / 'body.xml').write_text('<mujoco><worldbody/></mujoco>')
+    (shared / 'mesh.obj').write_bytes(b'fixture')
+    (project_dir / 'assets/robot/scene.xml').write_text("""<mujoco><compiler meshdir='../shared'/>
+      <include file='../shared/body.xml'/><asset><mesh file='mesh.obj'/></asset></mujoco>""")
+    loaded = load_project(project_dir)
+    assert {'assets/shared/body.xml', 'assets/shared/mesh.obj'} <= set(loaded.asset_paths)
+
+
+def test_digest_matches_actual_node_for_number_and_key_boundaries():
+    import shutil
+    import subprocess
+
+    node = shutil.which('node')
+    if node is None:
+        pytest.skip('Node is needed for the cross-language digest test')
+    values = [6.812889478169382e-05, 1e-7, 1e-6, 1e20, 1e21, -0.0, 5e-324,
+              1.7976931348623157e308, 333333333.33333329, 1000000000000000128]
+    payload = {'values': values, 'keys': {'10': 1, '2': 2, '01': 3, '\U00010000': 4, '\ue000': 5},
+               'text': '中文\n\ud800'}
+    expected = subprocess.check_output([node, '-e', '''
+const fs=require('fs'); const c=v=>Array.isArray(v)?v.map(c):v&&typeof v==='object'?
+Object.fromEntries(Object.keys(v).sort().map(k=>[k,c(v[k])])):v;
+process.stdout.write(JSON.stringify(c(JSON.parse(fs.readFileSync(0,'utf8')))));
+'''], input=json.dumps(payload).encode()).decode()
+    assert canonical_json(payload) == expected

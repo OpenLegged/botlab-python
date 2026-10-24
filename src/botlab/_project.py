@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import rfc8785
 import yaml
 
 from . import _host
@@ -146,49 +147,65 @@ def _project_relative_assets(project_dir: Path, source_files: dict[str, str], ma
     assets: set[str] = set()
     for resource in manifest["resources"]:
         source = resource["source"]
+        if resource["kind"] == "sensor":
+            target = next((item for item in manifest["resources"] if item["id"] == source), None)
+            if target is None or target["kind"] != "robot":
+                raise BotLabError(f'Sensor {resource["id"]!r} must reference a declared robot, got {source!r}')
+            continue
         if source.startswith(("http://", "https://", "data:", "procedural://")):
             continue
         if not _is_safe_archive_path(source):
             raise BotLabError(f'Unsafe project asset path "{source}" in resource {resource["id"]!r}')
         candidate = project_dir / source
+        if not candidate.resolve().is_relative_to(project_dir.resolve()):
+            raise BotLabError(f'Resource path "{source}" escapes the project.')
         if not candidate.exists():
             raise BotLabError(
                 f'Resource {resource["id"]!r} points at "{source}", which does not exist in the project.'
             )
         if candidate.is_file():
             assets.add(source)
+            if resource["kind"] in ("robot", "scene") and candidate.suffix.lower() in (".xml", ".mjcf"):
+                from ._mjcf import mjcf_dependencies
+
+                documents, dependencies = mjcf_dependencies(candidate, root=project_dir)
+                assets.update(path.relative_to(project_dir).as_posix() for path in set(documents) | dependencies)
         elif candidate.is_dir():
             for item in sorted(candidate.rglob("*")):
                 if item.is_file():
+                    if not item.resolve().is_relative_to(project_dir.resolve()):
+                        raise BotLabError(f'Resource path "{item}" escapes the project.')
                     assets.add(item.relative_to(project_dir).as_posix())
         else:
             raise BotLabError(f'Resource path "{source}" is neither a file nor a directory.')
     return sorted(assets)
 
 
-def _canonical_value(value: Any) -> Any:
-    """Mirror the TS ``canonicalValue``: sort object keys recursively.
+def canonical_json(value: Any) -> str:
+    """Match existing browser canonicalValue + JSON.stringify bytes (release v3).
 
-    JS ``Object.keys(value).sort()`` reorders every nested object, so the
-    digest input is key-order-canonical on both sides.
+    JCS supplies ECMAScript number rendering. Objects retain JSON.stringify's
+    numeric-index-first enumeration, which differs from pure JCS key ordering.
     """
     if isinstance(value, dict):
-        return {key: _canonical_value(value[key]) for key in sorted(value)}
-    if isinstance(value, list):
-        return [_canonical_value(item) for item in value]
-    return value
+        def key_order(key):
+            index = int(key) if key.isascii() and key.isdecimal() else -1
+            if 0 <= index < 2**32 - 1 and str(index) == key:
+                return (0, index)
+            return (1, key.encode("utf-16-be", errors="surrogatepass"))
 
-
-def canonical_json(value: Any) -> str:
-    """Serialize like JS ``JSON.stringify`` of the canonicalized digest input.
-
-    ``pythonReleaseProjectDigest`` canonicalizes (recursively sorted object
-    keys, finite numbers only) then digests ``JSON.stringify`` output.
-    Python's ``json`` with ``separators=(',', ':')`` produces the same bytes
-    as JS as long as floats render identically; integer-valued floats were
-    normalized to ``int`` upstream (JS ``JSON.stringify(1.0)`` is ``"1"``).
-    """
-    return json.dumps(_canonical_value(value), ensure_ascii=False, separators=(",", ":"))
+        return "{" + ",".join(canonical_json(key) + ":" + canonical_json(value[key])
+                              for key in sorted(value, key=key_order)) + "}"
+    if isinstance(value, (list, tuple)):
+        return "[" + ",".join(map(canonical_json, value)) + "]"
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        try:
+            return rfc8785.dumps(float(value)).decode("utf-8")
+        except (ValueError, OverflowError) as error:
+            raise BotLabError("Release digest contains a non-finite number") from error
+    # Well-formed JSON.stringify escapes lone UTF-16 surrogates, not other Unicode.
+    text = json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+    return "".join(f"\\u{ord(char):04x}" if 0xD800 <= ord(char) <= 0xDFFF else char for char in text)
 
 
 def python_release_project_digest(manifest: dict, files: dict[str, str]) -> str:

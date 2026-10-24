@@ -113,62 +113,30 @@ def _robot_format(path):
 
 
 def _load_model_with_transform(source, transform, mujoco_module, entry_transform=None):
-    """Compile the entry XML with ``transform`` applied to every XML in its
-    include chain — the browser does the same per VFS file (transforms.all).
-
-    XMLs land in a temp directory with the include layout preserved; every
-    other file of the model tree is symlinked so meshes still resolve.
-    ``entry_transform`` runs after ``transform`` on the entry file only — the
-    composed-scene injection point (the browser composes on the entry too).
-    """
+    """Stage only the model dependency closure, preserving sibling directories."""
     import os
-    import re
-    import shutil
     import tempfile
+    import xml.etree.ElementTree as ET
+    from pathlib import Path
 
-    model_dir = os.path.dirname(os.path.abspath(source))
-    entry_name = os.path.basename(source)
-    tmp_dir = tempfile.mkdtemp(prefix="botlab-model-")
-    try:
-        written = set()
+    from .._mjcf import mjcf_dependencies
 
-        def process(xml_path, rel_name):
-            if rel_name in written:
-                return
-            written.add(rel_name)
-            with open(xml_path, encoding="utf-8") as handle:
-                text = handle.read()
-            text = transform(text)
-            if entry_transform is not None and rel_name == entry_name:
-                text = entry_transform(text)
-            target = os.path.join(tmp_dir, rel_name)
-            os.makedirs(os.path.dirname(target) or tmp_dir, exist_ok=True)
-            with open(target, "w", encoding="utf-8") as handle:
-                handle.write(text)
-            for include in re.finditer(r"<include\s+file=\"([^\"]+)\"", text):
-                include_rel = os.path.normpath(include.group(1)).replace(os.sep, "/")
-                include_abs = os.path.normpath(os.path.join(model_dir, include_rel))
-                if os.path.isfile(include_abs):
-                    process(include_abs, include_rel)
-
-        process(os.path.abspath(source), entry_name)
-
-        for root, _dirs, files in os.walk(model_dir):
-            for name in files:
-                absolute = os.path.join(root, name)
-                rel = os.path.relpath(absolute, model_dir).replace(os.sep, "/")
-                if rel in written:
-                    continue
-                destination = os.path.join(tmp_dir, rel)
-                os.makedirs(os.path.dirname(destination) or tmp_dir, exist_ok=True)
-                if not os.path.lexists(destination):
-                    os.symlink(absolute, destination)
-
-        return mujoco_module.MjModel.from_xml_path(
-            os.path.join(tmp_dir, os.path.basename(source))
-        )
-    finally:
-        shutil.rmtree(tmp_dir, ignore_errors=True)
+    source = Path(os.path.abspath(source))
+    documents, assets = mjcf_dependencies(
+        source, transform=transform, entry_transform=entry_transform,
+    )
+    common = Path(os.path.commonpath([str(path.parent) for path in set(documents) | assets]))
+    with tempfile.TemporaryDirectory(prefix="botlab-model-") as temporary:
+        root = Path(temporary)
+        for path, document in documents.items():
+            target = root / path.relative_to(common)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            ET.ElementTree(document).write(target, encoding="utf-8")
+        for path in assets - set(documents):
+            target = root / path.relative_to(common)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.symlink_to(path)
+        return mujoco_module.MjModel.from_xml_path(str(root / source.relative_to(common)))
 
 
 def _build_physics(state, directory, path_resolver):
