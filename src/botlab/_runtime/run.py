@@ -175,7 +175,8 @@ def _build_physics(state, directory, path_resolver):
     import mujoco
 
     from ._compose import compose_entry_xml, load_extra_robot
-    from ._physics import MujocoPhysics, inject_auto_actuators
+    from ._physics import MujocoPhysics
+    from ._physics_xml import inject_auto_actuators
 
     robots = _robots(state)
     primary = robots[0]

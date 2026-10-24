@@ -17,7 +17,10 @@ from contextlib import redirect_stdout
 import numpy as np
 
 from botlab._runtime import _executor  # noqa: E402
-from botlab._runtime._processors import _model  # noqa: E402
+from botlab._runtime._processors import (
+    _model,  # noqa: E402
+    _model_session,  # noqa: E402
+)
 
 try:
     import onnxruntime  # noqa: E402
@@ -141,7 +144,7 @@ class TestSessionPool(unittest.TestCase):
             self.factory_calls.append((model_bytes, list(providers)))
             return _FakeMarkerSession(model_bytes.decode("utf-8"))
 
-        return _model.OnnxSessionPool(
+        return _model_session.OnnxSessionPool(
             session_factory=factory, available_providers=available_providers
         )
 
@@ -270,7 +273,7 @@ class TestModelProcessorFakes(unittest.TestCase):
         self._sessions = {}
         self._counter = 0
         self._factory_calls = []
-        self.pool = _model.OnnxSessionPool(
+        self.pool = _model_session.OnnxSessionPool(
             session_factory=self._factory,
             available_providers=["CPUExecutionProvider"],
         )
@@ -905,7 +908,7 @@ class TestModelProcessorFakes(unittest.TestCase):
             provider_calls.append(list(providers))
             return self._sessions[model_bytes.decode("utf-8")]
 
-        pool = _model.OnnxSessionPool(
+        pool = _model_session.OnnxSessionPool(
             session_factory=factory,
             available_providers=["CUDAExecutionProvider", "CPUExecutionProvider"],
         )

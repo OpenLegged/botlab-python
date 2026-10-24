@@ -16,7 +16,7 @@ names and starts at zero; extra robots resolve through their namespace.
 import os
 import re
 
-from ._physics import _strip_xml_comments, inject_auto_actuators
+from ._physics_xml import _strip_xml_comments, inject_auto_actuators
 
 # Name-reference attributes rewritten by the namespace pass. Must match
 # ROBOT_NAME_ATTRIBUTES in src/platform/workers/mujocoWorkerVfs.ts.

@@ -167,28 +167,31 @@ class Robot:
 
     # -- observation signals -----------------------------------------------
 
-    def base_angular_velocity(self, *, scale=None, source="root"):
+    def base_angular_velocity(self, *, scale=None, source="root", imu_sensors=None):
         return Signal("obs-base-ang-vel", "base-angular-velocity", _observation_data(
-            {
+            _with_imu_sensors({
                 "dim": 3,
                 "velocitySource": _non_empty_string(source, "velocity source"),
                 "rootAngularVelocityFrame": "body",
-            },
+            }, imu_sensors),
             scale=scale,
         ))
 
-    def base_linear_velocity(self, *, scale=None, source="root"):
+    def base_linear_velocity(self, *, scale=None, source="root", imu_sensors=None):
         return Signal("obs-base-lin-vel", "base-linear-velocity", _observation_data(
-            {"dim": 3, "velocitySource": _non_empty_string(source, "velocity source")},
+            _with_imu_sensors(
+                {"dim": 3, "velocitySource": _non_empty_string(source, "velocity source")},
+                imu_sensors,
+            ),
             scale=scale,
         ))
 
-    def projected_gravity(self, *, target="root"):
+    def projected_gravity(self, *, target="root", imu_sensors=None):
         target = _non_empty_string(target, "projected gravity target")
         data = {"dim": 3, "targetKind": "root" if target == "root" else "body"}
         if target != "root":
             data["target"] = target
-        return Signal("obs-projected-gravity", "projected-gravity", data)
+        return Signal("obs-projected-gravity", "projected-gravity", _with_imu_sensors(data, imu_sensors))
 
     def base_height(self):
         return Signal("obs-base-height", "base-height", {"dim": 1})
@@ -261,11 +264,11 @@ class Robot:
             return None
         return order
 
-    def imu(self, *, order=None, scale=None):
+    def imu(self, *, order=None, scale=None, imu_sensors=None):
         """Root orientation quaternion followed by base angular velocity."""
         indices = None if order is None else list(order)
         return Signal("obs-imu", "imu", _observation_data(
-            {"dim": 7 if indices is None else len(indices)},
+            _with_imu_sensors({"dim": 7 if indices is None else len(indices)}, imu_sensors),
             order=indices,
             scale=scale,
         ))
@@ -642,6 +645,15 @@ class Robot:
                 raise TypeError("commands waypoint must come from waypoint_tracking()")
             data.update(waypoint)
         return Signal("obs-commands", "commands", data)
+
+
+def _with_imu_sensors(data, imu_sensors):
+    """Write `imuSensors` only when given; an omitted field keeps the runtime's legacy rule."""
+    if imu_sensors is not None:
+        if not isinstance(imu_sensors, bool):
+            raise TypeError("imu_sensors must be a bool")
+        data["imuSensors"] = imu_sensors
+    return data
 
 
 def _observation_data(data, *, order=None, default=None, scale=None):

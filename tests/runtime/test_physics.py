@@ -8,7 +8,10 @@ from unittest import mock
 import mujoco  # noqa: E402
 import numpy as np  # noqa: E402
 
-from botlab._runtime import _physics  # noqa: E402
+from botlab._runtime import (
+    _physics,  # noqa: E402
+    _physics_ctrl,  # noqa: E402
+)
 
 HINGE_XML = """
 <mujoco>
@@ -95,13 +98,13 @@ def robot_resource(**config):
 
 class CtrlOffsetTest(unittest.TestCase):
     def test_floating_base_prefix_and_plain_match(self):
-        self.assertEqual(_physics.ctrl_offset(8, 1, 7, "qpos"), 7)
-        self.assertEqual(_physics.ctrl_offset(7, 1, 6, "qvel"), 6)
-        self.assertEqual(_physics.ctrl_offset(1, 1, 7, "qpos"), 0)
+        self.assertEqual(_physics_ctrl.ctrl_offset(8, 1, 7, "qpos"), 7)
+        self.assertEqual(_physics_ctrl.ctrl_offset(7, 1, 6, "qvel"), 6)
+        self.assertEqual(_physics_ctrl.ctrl_offset(1, 1, 7, "qpos"), 0)
 
     def test_incompatible_lengths_are_explicit(self):
         with self.assertRaises(ValueError) as ctx:
-            _physics.ctrl_offset(9, 1, 7, "qpos")
+            _physics_ctrl.ctrl_offset(9, 1, 7, "qpos")
         self.assertIn("incompatible", str(ctx.exception))
 
 
@@ -121,7 +124,7 @@ class SubstepPdMathTest(unittest.TestCase):
         qvel = np.zeros(7)
         qvel[6] = 2.0
         ctrl = np.zeros(1)
-        prepared = _physics.PreparedSubstepPd(
+        prepared = _physics_ctrl.PreparedSubstepPd(
             make_pd([0.5], [40.0], [4.0], [-10.0], [10.0]), qpos, qvel, ctrl
         )
         prepared.apply(qpos, qvel, ctrl)
@@ -137,7 +140,7 @@ class SubstepPdMathTest(unittest.TestCase):
         qpos = np.array([0, 0, 1, 1, 0, 0, 0, 0.3])
         qvel = np.zeros(7)
         ctrl = np.zeros(1)
-        prepared = _physics.PreparedSubstepPd(
+        prepared = _physics_ctrl.PreparedSubstepPd(
             make_pd(
                 [0.5], [40.0], [4.0], [-100.0], [100.0],
                 qpos_indices=[7], qvel_indices=[6], ctrl_indices=[0],
@@ -154,7 +157,7 @@ class SubstepPdMathTest(unittest.TestCase):
         qvel = np.zeros(1)
         ctrl = np.zeros(1)
         with self.assertRaises(ValueError) as ctx:
-            _physics.PreparedSubstepPd(
+            _physics_ctrl.PreparedSubstepPd(
                 make_pd([0.0], [1.0], [1.0], [-1.0], [1.0], qpos_indices=[0]),
                 qpos, qvel, ctrl,
             )
@@ -165,13 +168,13 @@ class SubstepPdMathTest(unittest.TestCase):
         qvel = np.zeros(1)
         ctrl = np.zeros(1)
         with self.assertRaises(ValueError) as ctx:
-            _physics.PreparedSubstepPd(
+            _physics_ctrl.PreparedSubstepPd(
                 make_pd([0.0, 0.0], [1.0, 1.0], [1.0, 1.0], [-1.0, -1.0], [1.0, 1.0]),
                 qpos, qvel, ctrl,
             )
         self.assertIn("legacy substep PD buffers must match ctrl length 1", str(ctx.exception))
         with self.assertRaises(ValueError) as ctx:
-            _physics.PreparedSubstepPd(
+            _physics_ctrl.PreparedSubstepPd(
                 make_pd(
                     [0.0], [1.0], [1.0], [-1.0], [1.0],
                     qpos_indices=[5], qvel_indices=[0], ctrl_indices=[0],
