@@ -96,3 +96,27 @@ transition 行字段：`from`（默认 any）/ `command`（指令脉冲，优先
 完整语义和示例见 BotLab 仓库 `docs/api/` 与 `docs/examples/`：
 [controller.md](https://github.com/OpenLegged/BotLab) 是 Signal/状态机/policy_bank 的
 权威契约，[multi-policy.md](https://github.com/OpenLegged/BotLab) 是多策略完整教程。
+
+## Named option parameters
+
+`project(parameters={"mode": {"label": "Mode", "default": 0,
+"options": [{"label": "Stand", "value": 0}, {"label": "Walk", "value": 2}]}})`
+creates a dropdown in compatible browser runtimes. Option values are unique safe
+integers, labels are non-empty, and the default must belong to the list. Do not
+combine `options` with `range`, `step`, or `unit`. Existing range parameters
+remain sliders. Native `run.set_parameter()` rejects non-member values.
+
+The control code still decides how a selection changes behavior. A
+`Signal.action(modify=...)` hook may call `sim.reset_to()` when the selection
+changes. In the native single-plan runner this reset is applied between plan
+execution and physics: the transitional action is discarded, history and last
+action are cleared, and the next action is recomputed at the reset frame. A
+controller that requests reset again on that first frame is rejected to prevent
+an endless reset loop. Native custom-controller/group reset behavior is unchanged.
+
+For exportable motion switching, prefer the compiled declaration:
+`PolicyController(robot, control=control, reset_on_change={"parameter": "mode",
+"motions": {0: stand_motion, 2: walk_motion}})`. Every option value must map to a
+Motion. The single-controller rule resets to frame zero with root body channel
+zero and native joint ordering; it supports editor, standalone browser and native
+execution without Python callbacks. It cannot be combined with `action(modify=...)`.

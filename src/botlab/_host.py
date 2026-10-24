@@ -129,11 +129,31 @@ def _finite_number(value: Any, label: str) -> float:
 def _declared_parameter(pid: str, value: Any) -> dict:
     if not isinstance(value, dict):
         raise BotLabError(f"[botlab] Parameter {pid!r} must be a mapping")
-    known = {"label", "default", "range", "step", "unit"}
+    known = {"label", "default", "range", "step", "unit", "options"}
     for key in value:
         if key not in known:
             raise BotLabError(f"[botlab] Parameter {pid!r} has unknown field {key!r}")
     default_value = _finite_number(value.get("default"), f"Parameter {pid!r} default")
+    options = None
+    if "options" in value:
+        if any(key in value for key in ("range", "step", "unit")):
+            raise BotLabError(f"[botlab] Parameter {pid!r} options cannot be combined with range, step or unit")
+        if not isinstance(value["options"], list) or not value["options"]:
+            raise BotLabError(f"[botlab] Parameter {pid!r} options must be a non-empty list")
+        options, seen = [], set()
+        for option in value["options"]:
+            if not isinstance(option, dict) or set(option) != {"label", "value"}:
+                raise BotLabError(f"[botlab] Parameter {pid!r} option requires only label and value")
+            label = _text(option["label"], f"Parameter {pid!r} option label")
+            number = _finite_number(option["value"], f"Parameter {pid!r} option value")
+            if number != int(number) or abs(number) > 9007199254740991:
+                raise BotLabError(f"[botlab] Parameter {pid!r} option value must be a safe integer")
+            if number in seen:
+                raise BotLabError(f"[botlab] Parameter {pid!r} option values must be unique")
+            seen.add(number)
+            options.append({"label": label, "value": number})
+        if default_value not in seen:
+            raise BotLabError(f"[botlab] Parameter {pid!r} default must be one of the option values")
     low = high = None
     if "range" in value:
         if not isinstance(value["range"], (list, tuple)) or len(value["range"]) != 2:
@@ -150,6 +170,8 @@ def _declared_parameter(pid: str, value: Any) -> dict:
         if step <= 0:
             raise BotLabError(f"[botlab] Parameter {pid!r} step must be positive")
     result = {"type": "number", "default": default_value}
+    if options is not None:
+        result["options"] = options
     if low is not None:
         result["min"] = low
     if high is not None:
@@ -357,6 +379,8 @@ class HostSession:
                 f"[botlab] Parameter {pid!r} is not declared by this project: {known}"
             )
         value = _finite_number(value, f"Parameter {pid!r} value")
+        if "options" in parameter and value not in {option["value"] for option in parameter["options"]}:
+            raise BotLabError(f"[botlab] Parameter {pid!r} value must be one of the option values")
         low = parameter.get("min")
         high = parameter.get("max")
         if (low is not None and value < low) or (high is not None and value > high):

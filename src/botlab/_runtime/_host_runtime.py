@@ -81,6 +81,9 @@ class LocalRuntimeSession:
         self._step_callback = None
         self._step_robot_ids = None
         self._current_frame = None
+        self._in_plan_step = False
+        self._pending_plan_reset = None
+        self._plan_step_offset = 0
         self._recorder = None
         self._substep_observer = None
         self._custom_step_active = False
@@ -142,6 +145,9 @@ class LocalRuntimeSession:
 
         controllers = plan.get("controllers") if isinstance(plan, dict) else None
         if controllers is not None:
+            if any(node.get("data", {}).get("resetOnChange") is not None
+                   for entry in controllers for node in entry.get("nodes", [])):
+                raise ValueError("reset_on_change requires a single controller")
             self._register_controller_group(controllers, registry)
             return
 
@@ -156,6 +162,12 @@ class LocalRuntimeSession:
         self._plan_output = plan.get("output") or {}
         self._plan_robot_id = plan.get("robot")
         self._modifier = modifier
+        reset_specs = [node.get("data", {}).get("resetOnChange") for node in nodes
+                       if node.get("data", {}).get("resetOnChange") is not None]
+        if reset_specs:
+            if modifier is not None or len(reset_specs) != 1:
+                raise ValueError("reset_on_change requires one reset rule and no Python modifier")
+            modifier = self._motion_reset_modifier(reset_specs[0])
         if modifier is not None:
             self._attach_action_hook(modifier)
 
@@ -314,6 +326,43 @@ class LocalRuntimeSession:
                 enriched["modelPath"] = self._path_resolver(source)
                 node["data"] = enriched
 
+    def _motion_reset_modifier(self, spec):
+        import botlab_host
+
+        manifest = botlab_host.project_state().manifest()
+        parameter = spec.get("parameter")
+        options = manifest["parameters"].get(parameter, {}).get("options")
+        mappings = spec.get("motions")
+        resources = {entry["id"]: entry["kind"] for entry in manifest["resources"]}
+        if not options or not isinstance(mappings, list) or len(mappings) != len(options):
+            raise ValueError("reset_on_change must map every option value to a Motion")
+        motion_ids = {}
+        for entry in mappings:
+            value, motion_id = entry.get("value"), entry.get("motionId")
+            if value not in {option["value"] for option in options} or value in motion_ids or resources.get(motion_id) != "motion":
+                raise ValueError("reset_on_change must map every option value to a Motion")
+            motion_ids[value] = motion_id
+        if spec.get("robotId") != self._plan_robot_id:
+            raise ValueError("reset_on_change must reset its controller's robot")
+        active, previous_index = None, -1
+
+        def modify(action, frame):
+            nonlocal active, previous_index
+            selected = botlab_host.parameter(parameter)
+            if selected not in motion_ids:
+                raise ValueError("reset_on_change received an unknown option value")
+            if selected != active or (frame.index == 0 and previous_index > 0):
+                active, previous_index = selected, -1
+                self.requestReset("Parameter changed", {
+                    "motionId": motion_ids[selected], "robotId": spec["robotId"],
+                    "frame": 0, "rootBody": 0,
+                })
+            else:
+                previous_index = frame.index
+            return action
+
+        return modify
+
     def _attach_action_hook(self, modifier):
         hook_nodes = [node for node in self._plan_nodes if node["type"] == "proc-action-hook"]
         if not hook_nodes:
@@ -434,6 +483,9 @@ class LocalRuntimeSession:
             self._display.update_diagnostics(diagnostics)
 
     def requestReset(self, reason, spec=None):
+        if self._in_plan_step:
+            self._pending_plan_reset = (reason, spec)
+            return None
         result = self._physics.request_reset(reason, spec)
         if self._recorder is not None:
             frame = self._current_frame
@@ -647,6 +699,8 @@ class LocalRuntimeSession:
         """The reset preamble every rollout performs before its first step."""
         from ._observations import clear_pose_velocity_states
 
+        self._pending_plan_reset = None
+        self._plan_step_offset = 0
         if self._reset_callback is not None:
             self._call_maybe_async(self._reset_callback())
         clear_pose_velocity_states()
@@ -664,14 +718,33 @@ class LocalRuntimeSession:
         import numpy as np
 
         dt = 1.0 / self._control_hz
-        frame = Frame(dt, step_index * dt, step_index)
-        self._current_frame = frame
-        self._physics.fill_observations(
-            self._executor,
-            last_action=last_action,
-            parameters=self._fill_parameters,
-        )
-        self._executor.step(frame=frame)
+        # A hook may request a scene reset after inference. Discard that plan's
+        # output and rebuild the first action from reset state before physics.
+        for attempt in range(2):
+            index = step_index - self._plan_step_offset
+            frame = Frame(dt, index * dt, index)
+            self._current_frame = frame
+            self._physics.fill_observations(
+                self._executor, last_action=last_action, parameters=self._fill_parameters,
+            )
+            self._in_plan_step = True
+            try:
+                self._executor.step(frame=frame)
+            finally:
+                self._in_plan_step = False
+            if self._pending_plan_reset is None:
+                break
+            reason, spec = self._pending_plan_reset
+            self._pending_plan_reset = None
+            if attempt:
+                raise RuntimeError("[botlab] controller requested reset again on its first reset frame")
+            start_time = self.requestReset(reason, spec)
+            from ._observations import clear_pose_velocity_states
+
+            clear_pose_velocity_states()
+            self._executor.reset()
+            self._plan_step_offset = step_index - round(float(start_time or 0) / dt)
+            last_action = None
         action = np.array(self._policy_action(), dtype=np.float32)
         ctrl, substep_pd = self._control_payload()
         self._physics.step_substeps(

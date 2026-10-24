@@ -216,3 +216,64 @@ def test_run_load_motion_works_after_close_and_cwd_moves(tmp_path: Path, monkeyp
     monkeypatch.chdir(tmp_path)  # away from the project directory
 
     assert run.load_motion("walk.npz")["frame_count"] == 4
+
+
+def test_option_switch_reset_discards_old_history_and_restarts_clock(pendulum_project):
+    import numpy as np
+
+    path = pendulum_project / "controller.py"
+    text = path.read_text().replace('concat, project', 'concat, project, clock, history')
+    text = text.replace('{"default": 1.0, "range": [0.0, 2.0]}',
+                        '{"default": 0, "options": [{"label": "A", "value": 0}, {"label": "B", "value": 2}]}')
+    text = text.replace('    observation = concat([robot.commands("gain")])', '''    selected = 0
+    def modify(action, frame):
+        nonlocal selected
+        value = sim.parameters.get("gain")
+        if value != selected:
+            selected = value
+            sim.request_reset("changed mode")
+        return action
+    observation = history(clock(unit="steps") + robot.commands("gain"), 2)[[0]]''')
+    text = text.replace('.action()', '.action(modify=modify)')
+    path.write_text(text)
+    with open_headless(pendulum_project) as run:
+        run.steps(7)
+        run.set_parameter("gain", 2)
+        first = run.step()
+        assert first.frame.index == 0
+        assert first.frame.time == 0
+        np.testing.assert_allclose(first.action, [2])
+        assert run.step().frame.index == 1
+        run.set_parameter("gain", 0)
+        assert run.step().frame.index == 0
+        run.reset()
+        assert run.step().frame.index == 0
+
+
+def test_compiled_motion_reset_switch_replays_fresh_run(pendulum_project):
+    import numpy as np
+
+    from botlab._project import load_project
+
+    path = pendulum_project / "controller.py"
+    source = path.read_text().replace('concat, project', 'concat, project, Motion, clock, history')
+    source = source.replace('{"default": 1.0, "range": [0.0, 2.0]}',
+                            '{"default": 0, "options": [{"label": "A", "value": 0}, {"label": "B", "value": 2}]}')
+    source = source.replace('def create_controller(sim):', 'motions = {0: Motion("a.npz"), 2: Motion("b.npz")}\n\ndef create_controller(sim):')
+    source = source.replace('concat([robot.commands("gain")])', 'history(clock(unit="steps") + robot.commands("gain"), 2)[[0]]')
+    source = source.replace('PolicyController(robot, control=control)', 'PolicyController(robot, control=control, reset_on_change={"parameter": "gain", "motions": motions})')
+    path.write_text(source)
+    write_motion_npz(pendulum_project / 'a.npz', dofs=1)
+    write_motion_npz(pendulum_project / 'b.npz', dofs=1)
+    assert not load_project(pendulum_project).plan_has_modifier
+    with open_headless(pendulum_project) as run:
+        run.set_parameter('gain', 2)
+        expected = [(record.action.copy(), run.physics.data.qpos.copy()) for record in [run.step()]]
+        run.steps(9)
+        run.set_parameter('gain', 0)
+        run.steps(5)
+        run.set_parameter('gain', 2)
+        record = run.step()
+        assert record.frame.index == 0
+        np.testing.assert_array_equal(record.action, expected[0][0])
+        np.testing.assert_array_equal(run.physics.data.qpos, expected[0][1])
