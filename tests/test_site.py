@@ -177,7 +177,7 @@ def test_build_site_directory_layout(
     assert (out_dir / "assets" / "embed-abc.js").is_file()
     assert (out_dir / "wasm" / "obj-parser" / "objParser.wasm").is_file()
     assert not (out_dir / "assets" / "editor-main-unused.js").exists()
-    # The whole project directory is mirrored under /project/ like the local server graft.
+    # Declared source and asset paths are preserved under /project/.
     assert (out_dir / "project" / "assets" / "robot" / "scene.xml").is_file()
     assert (out_dir / "project" / "controller.py").is_file()
     assert (out_dir / "release.zip").read_bytes() == package
@@ -227,3 +227,66 @@ def test_build_site_with_a_root_level_robot_asset(
     assert (out / "project/robot.xml").is_file()
     config = read_release_config((out / "release.zip").read_bytes())
     assert config["project"]["manifest"]["resources"][0]["source"] == "robot.xml"
+
+
+def test_site_copies_declared_files_and_mjcf_closure_only(
+    project_dir, mini_snapshot, monkeypatch,
+):
+    from botlab import _site
+
+    monkeypatch.setattr(_site, 'ensure_browser_runtime', lambda: mini_snapshot)
+    shared = project_dir / 'assets/shared'
+    shared.mkdir()
+    (shared / 'body.xml').write_text('<mujoco><worldbody/></mujoco>')
+    (shared / 'terrain.obj').write_bytes(b'mesh fixture')
+    (project_dir / 'assets/robot/scene.xml').write_text("""<mujoco>
+      <compiler meshdir='../shared'/><include file='../shared/body.xml'/>
+      <asset><mesh file='terrain.obj'/></asset></mujoco>""")
+    (project_dir / 'helper.py').write_text('VALUE = 1\n')
+    project = load_project(project_dir)
+    package = create_release_package(project, metadata={'name': 'Test Duck'})
+    # A real project has a venv, downloads, logs and previous outputs. None are
+    # runtime declarations, including unrelated files in the assets directory.
+    for name in ('.env', '.git/config', 'logs/run.log', 'downloads/archive.zip',
+                 'assets/unused.bin', 'tmp/old-site/index.html', 'release.zip'):
+        target = project_dir / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b'unrelated')
+    venv_python = project_dir / '.venv/bin/python'
+    venv_python.parent.mkdir(parents=True)
+    import sys
+    venv_python.symlink_to(sys.executable)
+
+    out = project_dir / 'tmp/new-site'
+    build_site_directory(project_dir, package, out)
+    actual = {p.relative_to(out / 'project').as_posix()
+              for p in (out / 'project').rglob('*') if p.is_file()}
+    assert actual == set(project.files) | set(project.asset_paths)
+    assert {'assets/shared/body.xml', 'assets/shared/terrain.obj', 'helper.py'} <= actual
+    assert (out / 'release.zip').read_bytes() == package
+    # Subsequent outputs under the same project must not copy earlier sites.
+    second = project_dir / 'tmp/second-site'
+    build_site_directory(project_dir, package, second)
+    assert not (second / 'project/tmp').exists()
+
+
+@pytest.mark.parametrize('change', ['missing', 'directory', 'external-symlink'])
+def test_site_rejects_invalid_declared_file_before_writing(
+    project_dir, mini_snapshot, monkeypatch, change, tmp_path_factory,
+):
+    from botlab import _site
+
+    monkeypatch.setattr(_site, 'ensure_browser_runtime', lambda: mini_snapshot)
+    package = create_release_package(load_project(project_dir), metadata={'name': 'T'})
+    path = project_dir / 'assets/robot/scene.xml'
+    path.unlink()
+    if change == 'directory':
+        path.mkdir()
+    elif change == 'external-symlink':
+        outside = tmp_path_factory.mktemp('outside') / 'scene.xml'
+        outside.write_text('<mujoco/>')
+        path.symlink_to(outside)
+    out = project_dir / 'tmp/new-site'
+    with pytest.raises(BotLabError, match='Project asset'):
+        build_site_directory(project_dir, package, out)
+    assert not out.exists()

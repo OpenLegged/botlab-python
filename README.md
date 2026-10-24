@@ -133,7 +133,7 @@ host — GitHub Pages included — next to the `release.zip`:
 docs/demo/
 ├── index.html        ← the embed runtime entry, renamed
 ├── assets/, wasm/    ← the runtime closure scanned from the bundled UI snapshot
-├── project/          ← the whole project directory (robot MJCF, meshes, …)
+├── project/          ← declared source files and asset dependencies (MJCF, meshes, …)
 └── release.zip       ← fetched by the page itself
 ```
 
@@ -141,6 +141,13 @@ Every runtime URL is page-relative, so the site works from a sub-path such as
 `user.github.io/<repo>/` and needs no special response headers (the embed
 runtime is single-threaded). Visitors can drag the robot, drive it with the
 keyboard, and switch policies without installing anything.
+
+The site copies only the source files and asset paths recorded in the release,
+including the collected MJCF dependency closure. Unrelated files such as virtual
+environments, logs, downloads and previous site outputs are not scanned or copied.
+Missing declared files and symlinks escaping the project fail before site files
+are written. You can build directly from the project root, including when the
+output lives below it; no staging copy is needed.
 
 The project must be self-contained — every resource under the project
 directory. A package that still needs a live-Python (`modify=…`) controller is
