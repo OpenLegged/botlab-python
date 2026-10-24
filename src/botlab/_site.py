@@ -7,8 +7,7 @@ push to any static host (GitHub Pages included) with zero configuration:
     ├── index.html            ← the UI snapshot's embed.html, renamed
     ├── assets/…              ← the embed runtime closure (static JS/WASM scan)
     ├── wasm/obj-parser/…     ← the module-string referenced terrain runtime
-    ├── project/…             ← the whole project directory, mirroring the
-    │                            ``/project/`` graft the local server serves
+    ├── project/…             ← declared source files and asset dependencies
     └── release.zip           ← the release package, fetched by './release.zip'
 
 Every runtime URL is page-relative, so the site works from a sub-path such as
@@ -285,6 +284,24 @@ def _iter_project_files(project_dir: Path) -> list[str]:
     )
 
 
+
+def _site_project_files(config: dict[str, Any]) -> list[str]:
+    """Use the release inventory; never discover files by walking the project."""
+    project = config["project"]
+    sources = project.get("files")
+    assets = project.get("assetPaths")
+    if not isinstance(sources, list) or not isinstance(assets, list):
+        raise BotLabError("Release project files and assetPaths must be arrays; rebuild the release.")
+    paths = set()
+    for entry in sources:
+        if not isinstance(entry, dict):
+            raise BotLabError("Release project files entry must be an object.")
+        paths.add(_require_safe_site_path(entry.get("path"), "project files entry"))
+    for path in assets:
+        paths.add(_require_safe_site_path(path, "assetPaths entry"))
+    return sorted(paths)
+
+
 def build_site_directory(project_dir: Path, package: bytes, out_dir: Path) -> dict[str, Any]:
     """Write the standalone site for one already-built release package."""
     snapshot_dir = ensure_browser_runtime()
@@ -329,10 +346,13 @@ def build_site_directory(project_dir: Path, package: bytes, out_dir: Path) -> di
     add_copy(snapshot_dir / "embed.html", "index.html")
     for file in sorted(closure):
         add_copy(_contained_file(snapshot_dir, file, "UI snapshot input"), file)
-    # The /project/ graft serves the whole project directory so MJCF mesh
-    # includes resolve relative to their XML, exactly like `botlab run`.
-    for relative in _iter_project_files(project_dir):
-        add_copy(_contained_file(project_dir, relative, "Project asset"), f"{asset_base}/{relative}")
+    # Preserve paths within the declared dependency closure so MJCF includes
+    # resolve, without walking venvs, logs, downloads or previous site outputs.
+    for relative in _site_project_files(config):
+        source = _contained_file(project_dir, relative, "Project asset")
+        if not source.is_file():
+            raise BotLabError(f'Project asset is missing or is not a file: "{relative}".')
+        add_copy(source, f"{asset_base}/{relative}")
 
     for source, target in copies:
         target.parent.mkdir(parents=True, exist_ok=True)

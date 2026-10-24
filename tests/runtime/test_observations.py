@@ -368,11 +368,41 @@ class RotatedStateTest(unittest.TestCase):
             node_type, context(self.model, self.data, node_data, **extra)
         )
 
-    def test_obs_base_ang_vel_inverse_rotates_root_qvel(self):
-        # R^T @ [0.1, 0, 0] for a 90 deg z quaternion = [0, -0.1, 0].
+    def test_obs_base_ang_vel_preserves_body_local_root_qvel(self):
+        # MuJoCo free-joint angular qvel is already body-local, unlike translation.
+        np.testing.assert_allclose(
+            self.value("obs-base-ang-vel", {"rootAngularVelocityFrame": "body"}),
+            [0.1, 0, 0], atol=1e-6
+        )
+
+    def test_unmarked_plan_preserves_legacy_angular_velocity(self):
         np.testing.assert_allclose(
             self.value("obs-base-ang-vel"), [0, -0.1, 0], atol=1e-6
         )
+
+    def test_rejects_unsupported_angular_velocity_frame(self):
+        with self.assertRaisesRegex(ValueError, "rootAngularVelocityFrame must be body"):
+            self.value("obs-base-ang-vel", {"rootAngularVelocityFrame": "world"})
+
+    def test_root_angular_velocity_matches_mujoco_local_object_velocity(self):
+        for quat in ([HALF_SQRT2, 0, 0, HALF_SQRT2], [0.5, 0.5, 0.5, 0.5]):
+            with self.subTest(quat=quat):
+                model, data = make_forward_model(
+                    quat=quat, qvel=[0.2, -0.3, 0.4, 0.7, -0.8, 0.9, 0]
+                )
+                velocity = np.zeros(6)
+                mujoco.mj_objectVelocity(
+                    model, data, mujoco.mjtObj.mjOBJ_BODY, 1, velocity, 1
+                )
+                root = obs.get_mujoco_observation(
+                    "obs-base-ang-vel", context(model, data, {"velocitySource": "root", "rootAngularVelocityFrame": "body"})
+                )
+                np.testing.assert_allclose(root, velocity[:3], atol=1e-6)
+                np.testing.assert_allclose(root, data.sensordata[4:7], atol=1e-6)
+                imu = obs.get_mujoco_observation(
+                    "obs-imu", context(model, data, {"velocitySource": "root", "rootAngularVelocityFrame": "body"})
+                )
+                np.testing.assert_allclose(imu[4:], velocity[:3], atol=1e-6)
 
     def test_obs_base_lin_vel_inverse_rotates_root_qvel(self):
         np.testing.assert_allclose(
@@ -402,7 +432,7 @@ class RotatedStateTest(unittest.TestCase):
     def test_obs_imu_g1_reads_sensors(self):
         # With a g1 profile the quaternion comes from the imu_quat sensor and
         # the angular velocity from the imu_gyro sensor (body frame), which
-        # differs from the kinematic inverse-rotation path.
+        # agrees with the root path when the site axes match the root body.
         output = self.value("obs-imu", {"robot": "g1"})
         gyro = self.data.sensordata[4:7]
         np.testing.assert_allclose(output[:4], [HALF_SQRT2, 0, 0, HALF_SQRT2], atol=1e-6)

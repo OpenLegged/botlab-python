@@ -169,7 +169,11 @@ class Robot:
 
     def base_angular_velocity(self, *, scale=None, source="root"):
         return Signal("obs-base-ang-vel", "base-angular-velocity", _observation_data(
-            {"dim": 3, "velocitySource": _non_empty_string(source, "velocity source")},
+            {
+                "dim": 3,
+                "velocitySource": _non_empty_string(source, "velocity source"),
+                "rootAngularVelocityFrame": "body",
+            },
             scale=scale,
         ))
 

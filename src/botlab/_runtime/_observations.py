@@ -1037,6 +1037,12 @@ def _base_angular_velocity(model, data, config):
         if sensor_gyro is not None:
             return sensor_gyro
     if _has_root_free_joint(model, data):
+        # Match the browser contract: marked plans use MuJoCo's body-local
+        # rotational qvel; previously published unmarked plans keep their path.
+        if (config or {}).get("rootAngularVelocityFrame") == "body":
+            return _float32_slice(data.qvel, "data.qvel", 3, 6)
+        if "rootAngularVelocityFrame" in (config or {}):
+            raise _error("mujocoObservations", "rootAngularVelocityFrame must be body")
         return _inverse_rotate_by_quaternion(
             _float32_slice(data.qvel, "data.qvel", 3, 6),
             _root_kinematic_quaternion(model, data),

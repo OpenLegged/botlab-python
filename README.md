@@ -113,6 +113,17 @@ resource preset fields.
 | `botlab ui status` | Show the status of the bundled UI snapshot. |
 | `botlab docs` | Print where the bundled docs (component reference, decision table, error guide) live in this install. |
 
+Resource names are identities: `Sensor(robot, name="Depth")` refers to the
+robot's declared ID even when `Robot(..., name="G1")` has a separate MJCF path.
+The CLI validates that reference without treating `G1` as a file.
+
+For MJCF robot and scene resources, validation collects XML includes and file
+assets (including compiler `meshdir`, `texturedir`, and `assetdir`) into the
+release asset inventory. Relative dependencies may live in sibling directories
+inside the project; missing files, cycles and dependencies escaping the project
+are reported before packaging. Native model transforms preserve that dependency
+layout, so terrain meshes do not need to be copied beneath the robot directory.
+
 ## Standalone site (`botlab build --site <dir>`)
 
 `botlab build --site docs/demo` writes a directory you can push to any static
@@ -122,7 +133,7 @@ host — GitHub Pages included — next to the `release.zip`:
 docs/demo/
 ├── index.html        ← the embed runtime entry, renamed
 ├── assets/, wasm/    ← the runtime closure scanned from the bundled UI snapshot
-├── project/          ← the whole project directory (robot MJCF, meshes, …)
+├── project/          ← declared source files and asset dependencies (MJCF, meshes, …)
 └── release.zip       ← fetched by the page itself
 ```
 
@@ -130,6 +141,13 @@ Every runtime URL is page-relative, so the site works from a sub-path such as
 `user.github.io/<repo>/` and needs no special response headers (the embed
 runtime is single-threaded). Visitors can drag the robot, drive it with the
 keyboard, and switch policies without installing anything.
+
+The site copies only the source files and asset paths recorded in the release,
+including the collected MJCF dependency closure. Unrelated files such as virtual
+environments, logs, downloads and previous site outputs are not scanned or copied.
+Missing declared files and symlinks escaping the project fail before site files
+are written. You can build directly from the project root, including when the
+output lives below it; no staging copy is needed.
 
 The project must be self-contained — every resource under the project
 directory. A package that still needs a live-Python (`modify=…`) controller is
