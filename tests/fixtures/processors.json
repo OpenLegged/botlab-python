@@ -1473,6 +1473,78 @@
     },
     {
       "type": "proc-action-hook",
+      "config": {
+        "resetOnChange": {
+          "parameter": "motion",
+          "robotId": "robot",
+          "motions": [
+            {
+              "value": 0,
+              "motionId": "walk"
+            },
+            {
+              "value": 2,
+              "motionId": "run"
+            }
+          ]
+        }
+      },
+      "inputDims": [
+        3
+      ],
+      "steps": [
+        {
+          "inputs": [
+            [
+              1,
+              -2,
+              3
+            ]
+          ],
+          "outputs": [
+            [
+              1,
+              -2,
+              3
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              4,
+              5,
+              6
+            ]
+          ],
+          "outputs": [
+            [
+              4,
+              5,
+              6
+            ]
+          ]
+        },
+        {
+          "inputs": [
+            [
+              0,
+              0,
+              0
+            ]
+          ],
+          "outputs": [
+            [
+              0,
+              0,
+              0
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "type": "proc-action-hook",
       "config": {},
       "inputDims": [
         3
