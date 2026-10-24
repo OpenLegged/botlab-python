@@ -1474,6 +1474,19 @@
     {
       "type": "proc-action-hook",
       "config": {
+        "endAfterSteps": {
+          "parameter": "motion",
+          "steps": [
+            {
+              "value": 0,
+              "steps": 3
+            },
+            {
+              "value": 2,
+              "steps": 5
+            }
+          ]
+        },
         "resetOnChange": {
           "parameter": "motion",
           "robotId": "robot",

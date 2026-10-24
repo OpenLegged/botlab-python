@@ -84,6 +84,11 @@ class LocalRuntimeSession:
         self._in_plan_step = False
         self._pending_plan_reset = None
         self._plan_step_offset = 0
+        self._completed_steps = 0
+        self.completed = False
+        self._active_step_limit = None
+        self._run_step_limit = None
+        self._run_revision = 0
         self._recorder = None
         self._substep_observer = None
         self._custom_step_active = False
@@ -148,6 +153,9 @@ class LocalRuntimeSession:
             if any(node.get("data", {}).get("resetOnChange") is not None
                    for entry in controllers for node in entry.get("nodes", [])):
                 raise ValueError("reset_on_change requires a single controller")
+            if any("endAfterSteps" in node.get("data", {})
+                   for entry in controllers for node in entry.get("nodes", [])):
+                raise ValueError("end_after_steps requires a single controller")
             self._register_controller_group(controllers, registry)
             return
 
@@ -168,6 +176,19 @@ class LocalRuntimeSession:
             if modifier is not None or len(reset_specs) != 1:
                 raise ValueError("reset_on_change requires one reset rule and no Python modifier")
             modifier = self._motion_reset_modifier(reset_specs[0])
+        end_specs = [node["data"]["endAfterSteps"] for node in nodes
+                     if "endAfterSteps" in node.get("data", {})]
+        self._run_step_limit = None
+        if end_specs:
+            import botlab_host
+
+            from ..sdk._run_end import parse_end_after_steps
+
+            if self._modifier is not None or len(end_specs) != 1:
+                raise ValueError("end_after_steps requires one rule and no Python modifier")
+            self._run_step_limit = parse_end_after_steps(
+                end_specs[0], botlab_host.project_state().manifest()["parameters"],
+            )
         if modifier is not None:
             self._attach_action_hook(modifier)
 
@@ -344,21 +365,19 @@ class LocalRuntimeSession:
             motion_ids[value] = motion_id
         if spec.get("robotId") != self._plan_robot_id:
             raise ValueError("reset_on_change must reset its controller's robot")
-        active, previous_index = None, -1
+        active, active_revision = None, -1
 
         def modify(action, frame):
-            nonlocal active, previous_index
+            nonlocal active, active_revision
             selected = botlab_host.parameter(parameter)
             if selected not in motion_ids:
                 raise ValueError("reset_on_change received an unknown option value")
-            if selected != active or (frame.index == 0 and previous_index > 0):
-                active, previous_index = selected, -1
+            if selected != active or active_revision != self._run_revision:
+                active, active_revision = selected, self._run_revision
                 self.requestReset("Parameter changed", {
                     "motionId": motion_ids[selected], "robotId": spec["robotId"],
                     "frame": 0, "rootBody": 0,
                 })
-            else:
-                previous_index = frame.index
             return action
 
         return modify
@@ -616,7 +635,7 @@ class LocalRuntimeSession:
             )
             self._broadcast_display(frame)
             step_index += 1
-            if self._physics.should_stop():
+            if self.completed or self._physics.should_stop():
                 break
         return step_index
 
@@ -701,6 +720,10 @@ class LocalRuntimeSession:
 
         self._pending_plan_reset = None
         self._plan_step_offset = 0
+        self._completed_steps = 0
+        self.completed = False
+        self._active_step_limit = None
+        self._run_revision += 1
         if self._reset_callback is not None:
             self._call_maybe_async(self._reset_callback())
         clear_pose_velocity_states()
@@ -717,10 +740,14 @@ class LocalRuntimeSession:
         """
         import numpy as np
 
+        if self.completed:
+            raise RuntimeError("run is completed; reset before stepping again")
         dt = 1.0 / self._control_hz
         # A hook may request a scene reset after inference. Discard that plan's
         # output and rebuild the first action from reset state before physics.
         for attempt in range(2):
+            if self._active_step_limit is None and self._run_step_limit is not None:
+                self._active_step_limit = self._run_step_limit(self._fill_parameters)
             index = step_index - self._plan_step_offset
             frame = Frame(dt, index * dt, index)
             self._current_frame = frame
@@ -744,6 +771,8 @@ class LocalRuntimeSession:
             clear_pose_velocity_states()
             self._executor.reset()
             self._plan_step_offset = step_index - round(float(start_time or 0) / dt)
+            self._completed_steps = 0
+            self._active_step_limit = None
             last_action = None
         action = np.array(self._policy_action(), dtype=np.float32)
         ctrl, substep_pd = self._control_payload()
@@ -754,6 +783,9 @@ class LocalRuntimeSession:
         self._physics.after_control_step()
         if self._recorder is not None:
             self._recorder.record_step(self._physics)
+        self._completed_steps += 1
+        self.completed = (self._active_step_limit is not None
+                          and self._completed_steps >= self._active_step_limit)
         return frame, action, ctrl, substep_pd
 
     def custom_step(self, step_index):

@@ -83,6 +83,11 @@ class HeadlessRun:
     def physics_hz(self) -> int:
         return self.session._physics_hz
 
+    @property
+    def completed(self) -> bool:
+        """Whether the declared end condition was reached (cleared by reset)."""
+        return self.session.completed
+
     def set_parameter(self, name, value) -> None:
         """Override a declared parameter from the next control step on."""
         import botlab_host
@@ -130,9 +135,11 @@ class HeadlessRun:
         return StepRecord(frame, None, None, None)
 
     def steps(self, count, on_step=None) -> list[StepRecord]:
-        """Run up to ``count`` control steps, stopping early if physics asks."""
+        """Run up to ``count`` control steps, stopping on completion or if physics asks."""
         records = []
         for _ in range(count):
+            if self.completed:
+                break
             record = self.step()
             records.append(record)
             if on_step is not None:
