@@ -120,3 +120,12 @@ For exportable motion switching, prefer the compiled declaration:
 Motion. The single-controller rule resets to frame zero with root body channel
 zero and native joint ordering; it supports editor, standalone browser and native
 execution without Python callbacks. It cannot be combined with `action(modify=...)`.
+
+### Independent camera field of view
+
+A `Sensor` preset/config accepts optional `horizontalFov` in degrees (finite,
+strictly between 0 and 180). `fov` remains the vertical FoV of the full sensor.
+Omitted/null `horizontalFov` preserves the aspect-derived horizontal view.
+For example, `fov: 58`, `horizontalFov: 87`, `fullWidth: 48`, `fullHeight: 27`
+calibrates the two axes independently, before applying `cropX`/`cropY` and
+`width`/`height`. Use a matching browser runtime for editor and published sites.

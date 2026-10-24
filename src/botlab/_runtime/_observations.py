@@ -634,6 +634,12 @@ def read_camera_config(node_data):
     raw_xyaxes = source.get("cameraXyaxes")
     rotation_mode = "xyaxes" if not (raw_xyaxes is None or raw_xyaxes == "") else "euler"
 
+    horizontal_fov = None
+    if source.get("horizontalFov") is not None:
+        horizontal_fov = _positive_number_field(source, "horizontalFov")
+        if horizontal_fov >= 180:
+            raise _error("CameraObservation", "horizontalFov must be less than 180 degrees")
+
     config = {
         "outputMode": _enum_field(source, "outputMode", ("rgb", "depth", "rgbd")),
         "targetKind": _enum_field(source, "targetKind", ("body", "site")),
@@ -648,6 +654,7 @@ def read_camera_config(node_data):
         "cropX": crop_x,
         "cropY": crop_y,
         "fov": _positive_number_field(source, "fov"),
+        "horizontalFov": horizontal_fov,
         "near": near,
         "far": far,
         "depthScale": _positive_number_field(source, "depthScale"),
@@ -2389,16 +2396,11 @@ def _camera_scene_option(geom_groups):
 
 
 def _camera_render(renderer, model, data, config):
-    """Update the renderer scene for one parsed camera config.
+    """Render the full sensor, with an optional independent horizontal FoV.
 
-    The frustum mirrors ``CameraObservationPoseResolver.update``:
-    ``fov`` is the vertical FoV of the FULL sensor and the horizontal extent
-    follows the full-sensor aspect (``camera.aspect = fullWidth/fullHeight``
-    in TS). MuJoCo's ``setView`` derives the frustum halfwidth from the
-    viewport aspect when ``frustum_width`` is 0 — the renderer viewport IS
-    fullWidth x fullHeight, so leaving it 0 reproduces the TS projection; the
-    crop window is taken from the rendered full frame afterwards (TS applies
-    it via ``camera.setViewOffset`` before rendering at width x height).
+    A zero frustum_width preserves MuJoCo's viewport-derived horizontal view.
+    Otherwise MuJoCo uses this field as the frustum *halfwidth*. Cropping is
+    applied to the full frame later, matching the browser's setViewOffset.
     """
     position, forward, up = _camera_pose(model, data, config)
 
@@ -2419,6 +2421,9 @@ def _camera_render(renderer, model, data, config):
         model.vis.global_.fovy = previous_fovy
 
     half_height = config["near"] * math.tan(math.radians(config["fov"]) / 2)
+    horizontal_fov = config["horizontalFov"]
+    half_width = (0.0 if horizontal_fov is None else
+                  config["near"] * math.tan(math.radians(horizontal_fov) / 2))
     for side in (0, 1):
         view = renderer.scene.camera[side]
         view.pos[:] = position
@@ -2431,7 +2436,7 @@ def _camera_render(renderer, model, data, config):
         view.frustum_center = 0.0
         # 0 lets mjr_render derive the halfwidth from the viewport aspect
         # (the full-sensor aspect); a nonzero value pins it instead.
-        view.frustum_width = 0.0
+        view.frustum_width = half_width
         view.orthographic = 0
 
 

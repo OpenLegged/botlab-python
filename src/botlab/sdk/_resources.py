@@ -195,6 +195,14 @@ class _DepthFrame:
 
 
 class Sensor:
+    """Camera resource calibrated by preset/config.
+
+    ``fov`` is the full sensor's vertical field of view in degrees. Optional
+    ``horizontalFov`` (0 < value < 180) independently sets its horizontal view;
+    omitted/None preserves the aspect-derived view. Cropping does not change
+    either calibration. Both browser and native runtimes use these fields.
+    """
+
     def __init__(self, source, *, preset=None, config=None, name=None):
         self.id = _declare_resource(
             "sensor",
