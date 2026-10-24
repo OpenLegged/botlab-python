@@ -189,7 +189,9 @@ class ControlClient:
             json.dump(descriptor, stream)
         return {"ok": True, **public_descriptor(descriptor), "websocket": descriptor["websocket"],
                 "pairing": "Remote middleware enrolled; identity pinned to this project.",
-                "agent_prompt": agent_prompt(descriptor["project"])}
+                # The AI drives the CLI from this checkout, not the remote host
+                # whose path /info reported and the descriptor pinned.
+                "agent_prompt": agent_prompt(self.project)}
 
     def select(self) -> dict:
         if self._selected is not None:
@@ -242,7 +244,9 @@ class ControlClient:
         descriptor = self.select()
         result = {"ok": True, **public_descriptor(descriptor), "websocket": descriptor.get("websocket"),
                   "pairing": "Open the project's runtime, pair with this middleware, then enable external control.",
-                  "agent_prompt": agent_prompt(descriptor["project"])}
+                  # Self, not the descriptor: a remote descriptor pins the
+                  # serving host's path, but the AI runs the CLI from here.
+                  "agent_prompt": agent_prompt(self.project)}
         if show_token:
             result["token"] = descriptor["token"]
         return result
