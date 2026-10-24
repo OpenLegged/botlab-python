@@ -34,10 +34,15 @@ Repository = "https://github.com/OpenLegged/botlab-python"
 [project.scripts]
 botlab = "botlab._cli:main"
 botlab-agent = "botlab.hil.agent:main"
+botlab-hil-gateway = "botlab.hil.gateway:main"
 
 [project.optional-dependencies]
 # Target inference only; no native physics or browser dependencies.
-target = ["numpy>=1.24", "onnxruntime>=1.18"]
+# websockets is pure Python and only needed for gateway (outbound) mode.
+# >=17.1: the long-lived (non-context-manager) dial needs the legacy flag.
+target = ["numpy>=1.24", "onnxruntime>=1.18", "websockets>=17.1"]
+# Run the device gateway standalone.
+gateway = ["websockets>=17.1"]
 # Native simulation via `botlab run`: native MuJoCo physics +
 # onnxruntime inference (CPU out of the box; GPU needs onnxruntime-gpu with
 # matching CUDA). Without these the CLI still compiles and packages projects.
@@ -45,7 +50,7 @@ runtime = [
   "numpy>=1.24",
   "mujoco>=3.2",
   "onnxruntime>=1.18",
-  "websockets>=12",
+  "websockets>=17.1",
 ]
 dev = [
   "pytest>=8.0",

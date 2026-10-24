@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import getpass
 import hashlib
 import os
 import platform
@@ -231,34 +232,86 @@ class AgentServer(socketserver.ThreadingTCPServer):
         super().__init__(address, AgentHandler)
 
 
+def serve_stream(state: AgentState, stream) -> None:
+    """Run the dispatch loop over any socket-shaped stream (TCP or gateway)."""
+    stream.settimeout(120)
+    while True:
+        message = receive(stream)
+        try:
+            result = state.dispatch(stream, message)
+            send(stream, {"ok": True, **result})
+        except Exception as exc:
+            # Selection validates its candidate before changing ownership.
+            # A stale or invalid candidate can therefore be rejected
+            # without unloading the previously selected project. All
+            # other execution/contract failures terminate the lease.
+            preserved = message.get("op") == "projects.load" and isinstance(exc, HilError)
+            send(stream, {"ok": False, "error": str(exc),
+                          **({"lease_preserved": True} if preserved else {})})
+            if not preserved:
+                return
+
+
 class AgentHandler(socketserver.BaseRequestHandler):
     def handle(self):
         self.request.settimeout(120)
         self.request.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         try:
-            while True:
-                message = receive(self.request)
-                try:
-                    result = self.server.state.dispatch(self, message)
-                    send(self.request, {"ok": True, **result})
-                except Exception as exc:
-                    # Selection validates its candidate before changing ownership.
-                    # A stale or invalid candidate can therefore be rejected
-                    # without unloading the previously selected project. All
-                    # other execution/contract failures terminate the lease.
-                    preserved = message.get("op") == "projects.load" and isinstance(exc, HilError)
-                    send(self.request, {"ok": False, "error": str(exc),
-                                        **({"lease_preserved": True} if preserved else {})})
-                    if not preserved:
-                        return
+            # serve_stream keys the lease on the stream itself.
+            serve_stream(self.server.state, self.request)
         except (OSError, EOFError, ValueError):
             pass
         finally:
-            self.server.state.disconnect(self)
+            self.server.state.disconnect(self.request)
+
+
+def _connect(options) -> int:
+    """Resident outbound mode: dial the gateway and serve frames over WebSocket."""
+    from .worker import WorkerBackend
+    from .wsstream import connect_gateway
+
+    root = options.root.expanduser()
+    state = AgentState(options.models_dir or root / "cache" / "models",
+                       WorkerBackend(options.backend, inference_timeout=options.inference_timeout), root=root)
+    token = os.environ.get("BOTLAB_HIL_TOKEN") or getpass.getpass("Gateway token: ")
+    print(f"BotLab HIL agent: dialing out to {options.gateway} as device {options.device}", flush=True)
+    while True:
+        try:
+            stream = connect_gateway(options.gateway, "agent", options.device, token)
+        except HilError as exc:
+            print(f"Gateway connection failed: {exc}", file=sys.stderr, flush=True)
+            if options.retry_interval <= 0:
+                return 1
+        else:
+            print(f"BotLab HIL agent: registered as {options.device} ({options.backend})", flush=True)
+            try:
+                serve_stream(state, stream)
+            except (OSError, EOFError, ValueError):
+                print("BotLab HIL agent: gateway link dropped", file=sys.stderr, flush=True)
+            finally:
+                state.disconnect(stream)
+                stream.close()
+        if options.retry_interval <= 0:
+            return 0
+        time.sleep(options.retry_interval)
 
 
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
+    if argv[:1] == ["connect"]:
+        parser = argparse.ArgumentParser(
+            description="Dial out to a BotLab HIL gateway and serve the device")
+        parser.add_argument("--gateway", required=True, help="wss:// gateway origin (ws:// loopback only)")
+        parser.add_argument("--device", required=True, help="device ID to register as")
+        parser.add_argument("--root", type=Path, default=Path("~/botlab"), help="Agent and project storage root")
+        parser.add_argument("--models-dir", type=Path, help="Legacy model cache (default: ROOT/cache/models)")
+        parser.add_argument("--backend", default="onnxruntime", help="onnxruntime or module:factory")
+        parser.add_argument("--inference-timeout", type=float, default=3.0,
+                            help="Backend inference deadline in seconds")
+        parser.add_argument("--retry-interval", type=float, default=5.0,
+                            help="seconds between gateway reconnection attempts; 0 exits on loss")
+        options = parser.parse_args(argv[1:])
+        return _connect(options)
     if argv[:1] == ["serve"]:
         argv.pop(0)
     parser = argparse.ArgumentParser(description="Serve a BotLab HIL target on a trusted network")

@@ -399,6 +399,48 @@ Direct targets cannot use SSH inspection, provisioning or network-management
 operations. Older Agents without project capabilities retain direct model-session
 behavior rather than gaining persistence automatically.
 
+### Gateway targets (outbound device link)
+
+The board can also dial out to a device gateway, so it never needs an inbound
+port — the shape used for hosted/web HIL. The gateway relays opaque HIL v1
+frames; the protocol, browser UI and acceptance rules are unchanged, and the
+inference path carries no receipts or retry semantics.
+
+```bash
+# Wherever the gateway runs (loopback dev, or wss:// behind/direct TLS):
+botlab-hil-gateway --host 127.0.0.1 --port 50060 --print-token
+# Token via BOTLAB_HIL_GATEWAY_TOKEN; there is no tokenless mode.
+
+# On the board: resident agent registers and redials after link loss:
+BOTLAB_HIL_TOKEN=<token> botlab-agent connect \
+  --gateway wss://boards.example.com --device rdk-x5-desk \
+  --backend onnxruntime --root ~/botlab
+
+# On the host:
+botlab target add desk-x5 --gateway wss://boards.example.com --device rdk-x5-desk
+BOTLAB_HIL_TOKEN=<token> botlab run --hil desk-x5
+```
+
+Rules: `ws://` endpoints are loopback-only; remote gateways must be `wss://`
+(private CA via `BOTLAB_HIL_CA_BUNDLE`, verification never disabled). The token
+is never stored in target settings and never passed as a CLI argument. One
+agent per device (re-registration takes over, closing the displaced pairing —
+device restart discards stale sessions), one coordinator per device (a second
+gets `device busy`), and either side dropping releases the HIL lease exactly
+like a TCP disconnect.
+
+Latency acceptance has two tiers: functional (the model executes correctly
+through the gateway — `tests/test_hil_gateway.py`) and real-time (wall-clock
+loop rate at the project's `control_hz`). Measure the latter with:
+
+```bash
+BOTLAB_HIL_TOKEN=<token> botlab target bench desk-x5 \
+  --model policy.onnx --iterations 200 --budget-ms 20
+```
+
+which reports RTT percentiles, effective Hz and whether the serial inference
+loop fits the 20 ms budget of a 50 Hz project.
+
 Browser runs default to `127.0.0.1`. Explicit `--host 0.0.0.0` serves ordinary
 local simulation on the LAN with HIL disabled. `--hil` requires loopback binding
 and cannot be combined with native/headless/export/custom-adapter modes. The

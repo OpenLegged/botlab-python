@@ -48,6 +48,33 @@ def endpoint_address(endpoint: str) -> tuple[str, int]:
         raise HilError("Target endpoint must be tcp://host:port") from exc
 
 
+def gateway_endpoint(endpoint: str) -> str:
+    """Validate a gateway origin: ws:// stays loopback, wss:// goes anywhere.
+
+    Mirrors the Control M1 endpoint rule — plaintext never leaves the loopback,
+    and paths are derived from the device ID, never stored.
+    """
+    if not isinstance(endpoint, str):
+        raise HilError("Gateway endpoint must be ws:// or wss://")
+    try:
+        url = urlsplit(endpoint)
+        scheme = url.scheme.lower()
+        if url.username or url.password or url.path not in ("", "/") or url.query or url.fragment:
+            raise ValueError
+        if not url.hostname:
+            raise ValueError
+        if url.port is not None and not 1 <= url.port <= 65535:
+            raise ValueError
+        if scheme == "ws":
+            if url.hostname not in ("127.0.0.1", "localhost", "::1") or url.port is None:
+                raise ValueError
+        elif scheme != "wss":
+            raise ValueError
+        return f"{scheme}://{url.netloc.lower()}"
+    except ValueError as exc:
+        raise HilError("Gateway endpoint must be a bare ws://loopback:port or wss://host[:port] origin") from exc
+
+
 def _read(sock: socket.socket, size: int) -> bytes:
     result = bytearray()
     while len(result) < size:

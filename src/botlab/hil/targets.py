@@ -8,7 +8,7 @@ import tempfile
 import uuid
 from pathlib import Path
 
-from .protocol import HilError, endpoint_address
+from .protocol import HilError, endpoint_address, gateway_endpoint
 
 
 def targets_path() -> Path:
@@ -44,11 +44,18 @@ def validate_target(value: dict) -> dict:
     if "password" in value or "credentials" in value:
         raise HilError("Credentials must not be saved in target settings")
     transport = value.get("transport", "tcp")
-    if transport not in ("tcp", "ssh"):
-        raise HilError("Target transport must be tcp or ssh")
+    if transport not in ("tcp", "ssh", "gateway"):
+        raise HilError("Target transport must be tcp, ssh or gateway")
     endpoint = value.get("endpoint")
     extras = {}
-    if transport == "ssh":
+    if transport == "gateway":
+        # The gateway token never lives here; it arrives via BOTLAB_HIL_TOKEN.
+        endpoint = gateway_endpoint(endpoint)
+        device = value.get("device")
+        if not isinstance(device, str) or not re.fullmatch(r"[a-zA-Z0-9_-]{1,64}", device):
+            raise HilError("Gateway target requires a device ID (letters, digits, _ or -)")
+        extras = {"transport": "gateway", "device": device}
+    elif transport == "ssh":
         from .devices import _ssh_config
         config = value.get("ssh")
         if not isinstance(config, dict) or set(config) - {"host", "user", "port", "identity_file", "host_key"}:
@@ -67,7 +74,8 @@ def validate_target(value: dict) -> dict:
             raise HilError("Unsupported device profile")
         extras = {"transport": "ssh", "ssh": config, "root": root,
                   "agent_port": agent_port, "profile": profile}
-    endpoint_address(endpoint)
+    else:
+        endpoint_address(endpoint)
     backend = value.get("backend") or "onnxruntime"
     if not isinstance(backend, str) or len(backend) > 200:
         raise HilError("Invalid backend name")

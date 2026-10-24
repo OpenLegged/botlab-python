@@ -116,13 +116,49 @@ Explicitly **not** in M1: accounts and remote discovery (M2), instance pools
 and isolation (M3), web HIL (H1 — separate chain, never rides these
 semantics).
 
-## HIL boundary (for H1)
+## H1: web HIL device chain (implemented)
 
-HIL inference rides its own chain and must not inherit Control-command
-semantics: no receipt/retry on the inference path, and acceptance splits into
-a functional tier (model executed correctly on the board) and a real-time tier
-(wall-clock loop rate at the project's `control_hz`, e.g. 50 Hz with serial
-multi-model calls). Device restart discards stale inference results.
+HIL inference rides its own chain and inherits **no** Control-command
+semantics: no receipts, no retry, no task table on the inference path. H1
+turns the board agent's inbound TCP listener into an **outbound** link so the
+board never needs an inbound port:
+
+- **Gateway** (`botlab-hil-gateway`, `botlab.hil.gateway`): relays opaque HIL
+  v1 frames between a coordinator (`/device/<id>`) and a resident agent that
+  dialed out (`/agent/<id>`). It never parses HIL frames. One shared bearer
+  token (operator channel, generated at startup or via
+  `BOTLAB_HIL_GATEWAY_TOKEN`, revealed with `--print-token`); there is no
+  tokenless mode. `ws://` is loopback-dev only; remote gateways are `wss://`
+  (direct via `--tls-cert/--tls-key` or a TLS reverse proxy). Compression is
+  off and links dial directly (no ambient system proxy).
+- **Agent** (`botlab-agent connect --gateway wss://… --device <id>`):
+  registers, serves the same dispatch loop as TCP mode, and redials after
+  lease termination or link loss (`--retry-interval`, default 5 s). The token
+  arrives via `BOTLAB_HIL_TOKEN` or a hidden prompt — never argv. Private CAs
+  use `BOTLAB_HIL_CA_BUNDLE`; verification is never disabled.
+- **Coordinator** (`transport: "gateway"` targets): `ws://` endpoints stay
+  loopback, `wss://` accepts any host — the same shape as the Control M1
+  endpoint rule (`gateway_endpoint` in `botlab.hil.protocol`). The token is
+  never stored in target settings; the run server reads `BOTLAB_HIL_TOKEN`.
+- **Pairing semantics**: one agent per device (re-registration takes over and
+  closes the displaced pairing — device restart), one coordinator per device
+  (a second gets `device busy`), and either side disappearing closes the
+  other, which releases the HIL lease exactly like a TCP disconnect. Stale
+  sessions are refused by the agent and the rejection terminates the lease;
+  nothing is replayed.
+
+**Acceptance is two tiers** (`tests/test_hil_gateway.py` covers the first):
+functional — the model executes correctly through the gateway, exclusive
+pairing, takeover and stale-result rejection, over loopback `ws://` and real
+`wss://` with a generated dev CA; real-time — wall-clock loop rate at the
+project's `control_hz` (50 Hz → 20 ms budget) measured on real hardware via
+`botlab target bench <name> --model policy.onnx --budget-ms 20`, which
+reports RTT percentiles, effective Hz and a budget verdict. Serial
+multi-model inference (one Promise chain in the browser) is the loop shape
+that must fit the budget.
+
+Explicitly **not** in H1: per-device credentials and accounts (M2), multi-
+tenant routing, and any receipt/retry semantics on the inference path.
 
 ## Frozen by these suites
 
@@ -130,6 +166,8 @@ multi-model calls). Device restart discards stale inference results.
   extension surface, `project_key`.
 - `tests/test_control_cli.py` — client identity, retry and restart refusal
   semantics (dedup, eviction, control generation, unsafe discovery).
+- `tests/test_hil_gateway.py` — H1 functional tier: relay transparency,
+  exclusive pairing, takeover, stale-session rejection, endpoint rules, TLS.
 - microduck-project `tests/test_control_api.py`, `tests/test_control_service.py`
   — middleware conformance, including extension-surface and frozen-envelope
   rejection tests.

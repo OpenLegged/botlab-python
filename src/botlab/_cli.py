@@ -331,6 +331,62 @@ def _hil_result(host, result):
     return result
 
 
+def _bench_target(with_host, args) -> dict:
+    """Serial-inference latency report: the real-time acceptance tier.
+
+    Functional acceptance (the model executes correctly) is covered by the
+    automated suites; this measures whether the whole loop fits the wall-clock
+    budget (e.g. 20 ms at control_hz=50). No receipts, no retry — inference
+    frames are never re-sent.
+    """
+    import base64
+    import hashlib
+    import random
+    import statistics
+    if not args.model:
+        raise BotLabError("target bench requires --model FILE")
+    _hil_result(with_host, with_host.handle("POST", "/hil/connect", {"target": args.name}))
+    session = with_host.handle("POST", "/hil/start", {})["session"]
+    content = Path(args.model).read_bytes()
+    digest = hashlib.sha256(content).hexdigest()
+    try:
+        model = with_host.handle("POST", "/hil/models", {
+            "session": session, "sha256": digest, "data": base64.b64encode(content).decode()})
+
+        def feed():
+            inputs = {}
+            for spec in model["inputs"]:
+                shape = [n if type(n) is int and n > 0 else 1 for n in spec["shape"]]
+                size = 1
+                for n in shape:
+                    size *= n
+                inputs[spec["name"]] = {"dtype": "float32", "shape": shape,
+                                        "data": [random.uniform(-1, 1) for _ in range(size)]}
+            return inputs
+
+        rtts, inference = [], []
+        for seq in range(args.iterations):
+            result = with_host.handle("POST", "/hil/infer", {
+                "session": session, "seq": seq, "model": digest, "inputs": feed()})
+            rtts.append(result["rtt_ms"])
+            inference.append(result["inference_ms"])
+    finally:
+        with_host.handle("POST", "/hil/stop", {"session": session})
+    rtts.sort()
+
+    def percentile(fraction):
+        return round(rtts[min(len(rtts) - 1, int(fraction * len(rtts)))], 3)
+
+    mean = statistics.fmean(rtts)
+    return {"target": args.name, "model": digest, "iterations": args.iterations,
+            "rtt_ms": {"p50": percentile(0.50), "p95": percentile(0.95),
+                       "p99": percentile(0.99), "max": round(rtts[-1], 3)},
+            "inference_ms_mean": round(statistics.fmean(inference), 3),
+            "effective_hz": round(1000 / mean, 1),
+            "budget_ms": args.budget_ms,
+            "real_time_budget_met": mean <= args.budget_ms}
+
+
 def _cmd_target(args: argparse.Namespace) -> int:
     import json
     from .hil import HilHost
@@ -350,10 +406,13 @@ def _cmd_target(args: argparse.Namespace) -> int:
             result = with_host.handle("POST", "/hil/devices/discover", {
                 "interface": args.interface, "profile": args.profile})
         elif action == "add":
-            if not args.name or not (args.endpoint or args.ssh_host):
-                raise BotLabError("target add requires NAME and --ssh-host HOST --user USER or --endpoint tcp://host:port")
+            if not args.name or not (args.endpoint or args.ssh_host or args.gateway):
+                raise BotLabError("target add requires NAME and (--ssh-host HOST --user USER "
+                                  "| --endpoint tcp://host:port | --gateway wss://… --device ID)")
             settings = {"id": args.name, "name": args.name, "backend": args.backend}
-            if args.ssh_host:
+            if args.gateway:
+                settings.update(transport="gateway", endpoint=args.gateway, device=args.device)
+            elif args.ssh_host:
                 settings.update(transport="ssh", ssh={"host": args.ssh_host, "user": args.user,
                     "port": args.ssh_port}, root=args.root, profile=args.profile or "generic-linux")
                 if args.identity_file:
@@ -375,6 +434,8 @@ def _cmd_target(args: argparse.Namespace) -> int:
                 result = with_host.handle("POST", "/hil/devices/host-key", body)
             elif action == "inspect" and target and target.get("transport") == "ssh":
                 result = with_host.handle("POST", "/hil/devices/inspect", body)
+            elif action == "bench":
+                result = _bench_target(with_host, args)
             else:
                 result = _hil_result(with_host, with_host.handle("POST", "/hil/connect", body))
                 if action == "projects":
@@ -513,9 +574,15 @@ def build_parser() -> argparse.ArgumentParser:
     ui.set_defaults(func=_cmd_ui)
 
     target = subparsers.add_parser("target", help="manage HIL target devices")
-    target.add_argument("action", choices=["list", "add", "inspect", "remove", "discover", "identity", "provision", "projects"])
+    target.add_argument("action", choices=["list", "add", "inspect", "remove", "discover", "identity", "provision", "projects", "bench"])
     target.add_argument("name", nargs="?")
     target.add_argument("--endpoint")
+    target.add_argument("--gateway", help="outbound gateway origin, ws://loopback:port or wss://host[:port]")
+    target.add_argument("--device", help="device ID the board agent registered at the gateway")
+    target.add_argument("--model", type=Path, help="model file for target bench")
+    target.add_argument("--iterations", type=int, default=200, help="bench inference iterations")
+    target.add_argument("--budget-ms", type=float, default=20.0,
+                        help="wall-clock budget per inference (control_hz=50 → 20)")
     target.add_argument("--backend", default="onnxruntime")
     target.add_argument("--ssh-host")
     target.add_argument("--user")

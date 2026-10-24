@@ -93,7 +93,9 @@ def _run_native(project: Path, *extra_env: str) -> subprocess.CompletedProcess:
 
 def test_pyproject_exposes_botlab_and_target_agent_entry_points():
     data = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    assert data["project"]["scripts"] == {"botlab": "botlab._cli:main", "botlab-agent": "botlab.hil.agent:main"}
+    assert data["project"]["scripts"] == {"botlab": "botlab._cli:main",
+                                          "botlab-agent": "botlab.hil.agent:main",
+                                          "botlab-hil-gateway": "botlab.hil.gateway:main"}
     extras = data["project"]["optional-dependencies"]["runtime"]
     assert {"numpy", "mujoco", "onnxruntime", "websockets"} <= {
         requirement.split(">=")[0].split("[")[0] for requirement in extras

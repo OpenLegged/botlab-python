@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import os
 import re
 import socket
 import threading
@@ -47,6 +48,7 @@ class HilHost:
         self.sequence = -1
         self.models = {}
         self.tunnel = None
+        self.tunnel_device = None
         self.credentials = {}
         self.credential_targets = {}
         self.device_info = {}
@@ -88,6 +90,9 @@ class HilHost:
         if self.tunnel:
             self.tunnel.close()
             self.tunnel = None
+        if self.tunnel_device:
+            self.tunnel_device.close()
+            self.tunnel_device = None
         self.application["loaded"] = None
         self.project_generation += 1
 
@@ -303,6 +308,42 @@ class HilHost:
         self._store_credentials(target, credentials)
         return device
 
+    def _open_stream(self, target: dict, body: dict | None = None):
+        """Open one agent stream: direct TCP, SSH tunnel or gateway relay.
+
+        Returns (stream, tunnel, device); callers close stream, then tunnel,
+        then device. Gateway streams are outbound WebSocket links to the
+        device gateway; the HIL protocol itself is unchanged and the token
+        comes exclusively from BOTLAB_HIL_TOKEN.
+        """
+        if target.get("transport") == "gateway":
+            from .wsstream import connect_gateway
+            token = os.environ.get("BOTLAB_HIL_TOKEN")
+            if not token:
+                raise HilError("Gateway targets need BOTLAB_HIL_TOKEN set for the run server")
+            return connect_gateway(target["endpoint"], "device", target["device"], token), None, None
+        address = endpoint_address(target["endpoint"])
+        tunnel = device = None
+        if target.get("transport") == "ssh":
+            device = self._device(body or {})
+            try:
+                tunnel = device.open_tunnel()
+                address = tunnel.address
+            except BaseException:
+                device.close()
+                raise
+        try:
+            stream = socket.create_connection(address, timeout=3)
+        except BaseException:
+            if tunnel:
+                tunnel.close()
+            if device:
+                device.close()
+            raise
+        if hasattr(stream, "setsockopt"):
+            stream.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        return stream, tunnel, device
+
     def _inspect_device(self, body, provision=False):
         # Management jobs hold self.lock. Refuse an active session before any
         # device or connection changes; inspecting an idle target is read-only.
@@ -368,13 +409,7 @@ class HilHost:
         stream = tunnel = device = None
         try:
             self._progress({"stage": "connect", "message": "Opening target project management connection"})
-            address = endpoint_address(target["endpoint"])
-            if target.get("transport") == "ssh":
-                device = self._device({"target": target_id})
-                tunnel = device.open_tunnel()
-                address = tunnel.address
-            stream = socket.create_connection(address, timeout=3)
-            stream.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            stream, tunnel, device = self._open_stream(target, {"target": target_id})
 
             def request(message):
                 stream.settimeout(10)
@@ -706,16 +741,7 @@ class HilHost:
             self._drop()
             self.selected_target = target_id
             try:
-                address = endpoint_address(target["endpoint"])
-                if target.get("transport") == "ssh":
-                    device = self._device(body)
-                    try:
-                        self.tunnel = device.open_tunnel()
-                        address = self.tunnel.address
-                    finally:
-                        device.close()
-                self.sock = socket.create_connection(address, timeout=3)
-                self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                self.sock, self.tunnel, self.tunnel_device = self._open_stream(target, body)
                 result, _ = self._rpc({"op": "hello"})
                 self.device = result["device"]
                 if self.device.get("backend") != target["backend"]:
