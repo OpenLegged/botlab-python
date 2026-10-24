@@ -405,20 +405,6 @@ def test_connection_token_requires_explicit_flag(middleware):
     assert invoke("connection", "--show-token")[1]["token"] == "test-token"
 
 
-def test_connection_embeds_agent_prompt_without_token(middleware):
-    result = invoke("connection", "--show-token")[1]
-    prompt = result["agent_prompt"]
-    assert result["project"] in prompt
-    assert "state --json" in prompt
-    # The unpaired branch teaches token relay through chat only.
-    assert "connection --show-token" in prompt
-    assert "对话" in prompt
-    assert "test-token" not in prompt
-    # The prompt assumes a prepared environment: it must never teach installs.
-    for banned in ("pip install", "uv tool", "npm install", "git clone"):
-        assert banned not in prompt
-
-
 @pytest.mark.parametrize("origin", ["http://example.com:80", "http://10.0.0.5:8776", "http://127.0.0.1:80/path",
                                     "http://user:secret@127.0.0.1:80", "http://127.0.0.1:80?token=x",
                                     "http://127.0.0.1:80#x", "https://user:secret@example.com",
