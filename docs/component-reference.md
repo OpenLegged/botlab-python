@@ -129,3 +129,18 @@ Omitted/null `horizontalFov` preserves the aspect-derived horizontal view.
 For example, `fov: 58`, `horizontalFov: 87`, `fullWidth: 48`, `fullHeight: 27`
 calibrates the two axes independently, before applying `cropX`/`cropY` and
 `width`/`height`. Use a matching browser runtime for editor and published sites.
+
+
+## 有限时长演示与重播
+
+`PolicyController(..., end_after_steps=500)` 在提交第 500 个控制步（含物理子步）后结束。
+也可以写 `end_after_steps={"parameter": "motion_id", "steps": {0: 417, 1: 523}}`，
+映射必须覆盖该选项参数的所有值。步数是正安全整数；秒数由项目显式乘控制频率并向上取整。
+每次复位后的第一控制步读取所选步数，暂停和续播不重置预算。配合已有
+`reset_on_change={"parameter": "motion_id", "motions": ...}`，动作切换会复位并开始新一轮。
+
+`open_headless()` 返回值的 `completed` 表示已达到声明的结束条件；`steps(count)`
+到点提前返回，结束后 `step()` 报错，调用 `reset()` 才能重播。原生 `run()` 自动返回。
+编辑器和静态演示显示“已结束”，点击播放自动复位后重播。未声明时继续原有连续运行行为。
+此阶段只支持单个无 Python action modifier 的 `PolicyController`；不推断任务成功、失败或跌倒。
+发布包含该字段的工程时，BotLab 浏览器运行时与 Python SDK 必须一起更新到支持该字段的版本。

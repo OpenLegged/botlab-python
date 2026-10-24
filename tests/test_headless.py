@@ -250,7 +250,8 @@ def test_option_switch_reset_discards_old_history_and_restarts_clock(pendulum_pr
         assert run.step().frame.index == 0
 
 
-def test_compiled_motion_reset_switch_replays_fresh_run(pendulum_project):
+@pytest.mark.parametrize("limited", [False, True])
+def test_compiled_motion_reset_switch_replays_fresh_run(pendulum_project, limited):
     import numpy as np
 
     from botlab._project import load_project
@@ -262,6 +263,8 @@ def test_compiled_motion_reset_switch_replays_fresh_run(pendulum_project):
     source = source.replace('def create_controller(sim):', 'motions = {0: Motion("a.npz"), 2: Motion("b.npz")}\n\ndef create_controller(sim):')
     source = source.replace('concat([robot.commands("gain")])', 'history(clock(unit="steps") + robot.commands("gain"), 2)[[0]]')
     source = source.replace('PolicyController(robot, control=control)', 'PolicyController(robot, control=control, reset_on_change={"parameter": "gain", "motions": motions})')
+    if limited:
+        source = source.replace('reset_on_change={', 'end_after_steps={"parameter": "gain", "steps": {0: 7, 2: 12}}, reset_on_change={')
     path.write_text(source)
     write_motion_npz(pendulum_project / 'a.npz', dofs=1)
     write_motion_npz(pendulum_project / 'b.npz', dofs=1)
@@ -277,3 +280,72 @@ def test_compiled_motion_reset_switch_replays_fresh_run(pendulum_project):
         assert record.frame.index == 0
         np.testing.assert_array_equal(record.action, expected[0][0])
         np.testing.assert_array_equal(run.physics.data.qpos, expected[0][1])
+        if limited:
+            assert len(run.steps(100)) == 11
+            assert run.completed
+            run.reset()
+            assert len(run.steps(100)) == 12
+        # Even a reset after only frame zero must reapply the selected motion pose.
+        for _ in range(2):
+            run.reset()
+            np.testing.assert_array_equal(run.step().action, expected[0][0])
+            np.testing.assert_array_equal(run.physics.data.qpos, expected[0][1])
+
+
+@pytest.mark.parametrize("limit", [1, 3, 8])
+def test_end_after_steps_stops_physics_and_reset_replays(pendulum_project, limit):
+    import numpy as np
+
+    path = pendulum_project / "controller.py"
+    path.write_text(path.read_text().replace(
+        "PolicyController(robot, control=control)",
+        f"PolicyController(robot, control=control, end_after_steps={limit})",
+    ))
+    with open_headless(pendulum_project) as run:
+        states = []
+        records = run.steps(limit + 10, on_step=lambda _: states.append(run.physics.data.qpos.copy()))
+        assert len(records) == limit
+        assert [r.frame.index for r in records] == list(range(limit))
+        assert run.physics.data.time == pytest.approx(limit / run.control_hz)
+        assert run.completed
+        assert run.steps(2) == []
+        with pytest.raises(RuntimeError, match="completed"):
+            run.step()
+        assert run.physics.data.time == pytest.approx(limit / run.control_hz)
+        run.reset()
+        assert not run.completed
+        replay = []
+        assert len(run.steps(limit + 1, on_step=lambda _: replay.append(run.physics.data.qpos.copy()))) == limit
+        np.testing.assert_array_equal(replay, states)
+
+
+def test_parameter_end_limit_is_sampled_on_reset_and_native_run_stops(pendulum_project):
+    path = pendulum_project / "controller.py"
+    source = path.read_text().replace(
+        '{"default": 1.0, "range": [0.0, 2.0]}',
+        '{"default": 0, "options": [{"label": "A", "value": 0}, {"label": "B", "value": 2}]}',
+    ).replace("PolicyController(robot, control=control)",
+              'PolicyController(robot, control=control, end_after_steps={"parameter": "gain", "steps": {0: 3, 2: 5}})')
+    path.write_text(source)
+    with open_headless(pendulum_project) as run:
+        run.step()
+        run.set_parameter("gain", 2)
+        assert len(run.steps(20)) == 2  # this run retains its original budget
+        run.reset()
+        assert len(run.steps(20)) == 5
+        run.set_parameter("gain", 0)
+        assert run.session.run() == 3  # the CLI uses this same loop
+        assert run.completed
+
+
+@pytest.mark.parametrize("limit", [0, -1, True, 1.2, 2**53, {"steps": {0: 2}},
+    {"parameter": "gain", "steps": {0: 0}}])
+def test_end_after_steps_rejects_invalid_declarations(pendulum_project, limit):
+    path = pendulum_project / "controller.py"
+    path.write_text(path.read_text().replace(
+        "PolicyController(robot, control=control)",
+        f"PolicyController(robot, control=control, end_after_steps={limit!r})",
+    ))
+    with pytest.raises(ValueError, match="end_after_steps"):
+        with open_headless(pendulum_project):
+            pass

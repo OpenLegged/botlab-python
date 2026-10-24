@@ -41,6 +41,7 @@ class PolicyController(Controller):
         kd=None,
         effort_limit=None,
         reset_on_change=None,
+        end_after_steps=None,
     ):
         if not isinstance(robot, Robot):
             raise TypeError("PolicyController robot must be a BotLab Robot")
@@ -137,6 +138,13 @@ class PolicyController(Controller):
             hook["data"]["resetOnChange"] = {
                 "parameter": parameter, "motions": mappings, "robotId": robot.id,
             }
+
+        if end_after_steps is not None:
+            from ._run_end import encode_end_after_steps
+            if self.modify_action is not None:
+                raise ValueError("end_after_steps cannot be combined with an action modifier")
+            hook = next(node for node in self._plan_data["nodes"] if node["type"] == "proc-action-hook")
+            hook["data"]["endAfterSteps"] = encode_end_after_steps(end_after_steps)
 
     @property
     def plan(self):
