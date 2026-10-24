@@ -21,7 +21,7 @@
 
 | 调用 | 维度 | 备注 |
 |------|------|------|
-| `robot.base_angular_velocity(scale=, source=)` | 3 | |
+| `robot.base_angular_velocity(scale=, source=)` | 3 | 自由根关节读取机体系角速度，无需再次逆旋转 |
 | `robot.base_linear_velocity(scale=, source=)` | 3 | |
 | `robot.projected_gravity(target=)` | 3 | `target="root"` 或 body 名 |
 | `robot.base_height()` | 1 | |

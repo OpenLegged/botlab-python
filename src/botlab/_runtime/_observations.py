@@ -1037,10 +1037,9 @@ def _base_angular_velocity(model, data, config):
         if sensor_gyro is not None:
             return sensor_gyro
     if _has_root_free_joint(model, data):
-        return _inverse_rotate_by_quaternion(
-            _float32_slice(data.qvel, "data.qvel", 3, 6),
-            _root_kinematic_quaternion(model, data),
-        )
+        # Free-joint rotational qvel is already in the root body frame.
+        # Only its translational component needs a world-to-body rotation.
+        return _float32_slice(data.qvel, "data.qvel", 3, 6)
     body_index = _base_body_index(model)
     address = body_index * 6
     return _float32_slice(data.cvel, "data.cvel", address, address + 3)

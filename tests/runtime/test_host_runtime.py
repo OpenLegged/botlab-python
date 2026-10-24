@@ -210,12 +210,14 @@ class SessionPlanLoopTest(unittest.TestCase):
                 }
 
         physics = SpyPhysics(stop_after=1)
+        physics.compose_payloads = mock.Mock(side_effect=lambda actions: (None, actions["robot-1"][1]))
         session = _host_runtime.LocalRuntimeSession(
             physics,
             registry={**FAKE_REGISTRY, "proc-pd": PdStub},
         )
         self.addCleanup(session.close)
         session.registerPolicyController({
+            "robot": "robot-1",
             "nodes": [
                 {"id": "c", "type": "obs-constant", "data": {"values": [1.0, 2.0]}},
                 {"id": "pd", "type": "proc-pd", "data": {}},
@@ -233,6 +235,7 @@ class SessionPlanLoopTest(unittest.TestCase):
         _label, _steps, ctrl, substep_pd = pd_calls[0]
         self.assertIsNone(ctrl)
         self.assertEqual(substep_pd["target"], [0.5])
+        physics.compose_payloads.assert_called_once_with({"robot-1": ("pd", substep_pd)})
 
     def test_missing_policy_output_is_explicit(self):
         class NoOutputSource(ConstantSource):

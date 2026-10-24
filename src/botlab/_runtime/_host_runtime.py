@@ -75,6 +75,7 @@ class LocalRuntimeSession:
         self._groups = []
         self._plan_nodes = None
         self._plan_output = {}
+        self._plan_robot_id = None
         self._modifier = None
         self._reset_callback = None
         self._step_callback = None
@@ -153,6 +154,7 @@ class LocalRuntimeSession:
         self._executor = executor
         self._plan_nodes = nodes
         self._plan_output = plan.get("output") or {}
+        self._plan_robot_id = plan.get("robot")
         self._modifier = modifier
         if modifier is not None:
             self._attach_action_hook(modifier)
@@ -542,7 +544,9 @@ class LocalRuntimeSession:
         view = processor.get_substep_pd() if processor is not None else None
         if view is None:
             raise RuntimeError("[botlab] PolicyController PD output is unavailable")
-        return None, view
+        # The PD processor emits robot-local indices, just like a controller
+        # group. Resolve all three absolute index arrays before worker stepping.
+        return self._physics.compose_payloads({self._plan_robot_id: ("pd", view)})
 
     def _fill_parameters(self, name):
         import botlab_host
