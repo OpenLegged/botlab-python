@@ -410,6 +410,9 @@ def test_connection_embeds_agent_prompt_without_token(middleware):
     prompt = result["agent_prompt"]
     assert result["project"] in prompt
     assert "state --json" in prompt
+    # The unpaired branch teaches token relay through chat only.
+    assert "connection --show-token" in prompt
+    assert "对话" in prompt
     assert "test-token" not in prompt
     # The prompt assumes a prepared environment: it must never teach installs.
     for banned in ("pip install", "uv tool", "npm install", "git clone"):

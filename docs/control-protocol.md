@@ -91,6 +91,17 @@ New optional fields are compatible; unknown API major versions are rejected.
 
 `control.stop` is a mandatory protocol operation, also accepted at `/commands`.
 The generic client uses `/commands` so stop shares the same request registry and retry
+
+### Optional `agent-prompt` extension
+
+A middleware may declare the named extension `agent-prompt` in `/info` `extensions`
+and serve `GET /control/v1/agent-prompt` → `{"ok":true,"agent_prompt":"..."}`,
+built from `botlab.control.prompts.agent_prompt` so the browser's CLI-control
+panel can display the handoff prompt *before* pairing. The endpoint is
+credential-free and must be Origin-gated (browser origins only; loopback plus
+the middleware's declared origin allowlist) — the payload is canned text plus
+the project path and carries no secrets. Clients that do not declare the
+extension simply do not have the endpoint; it is not a core v1 endpoint.
 behavior. Control API v1 requires `command_id` to equal `request_id` for every
 command. Submission responses and subsequent queries preserve this identity; queries
 use that same ID. Querying a different instance
