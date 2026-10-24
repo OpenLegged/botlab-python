@@ -117,22 +117,18 @@ class DisplayServer:
             return
         scene = request.path == scene_path
         clients = self._scene_clients if scene else self._clients
-        if scene:
+        payload = (
+            self._scene_payload if scene
+            else self._text_payload({"type": "meta", **self._metadata})
+        )
+        # Initial message and registration must be atomic with broadcasts.
+        # A receiver may start stepping as soon as it receives meta or scene.
+        with self._lock:
             try:
-                websocket.send(self._scene_payload)
+                websocket.send(payload)
             except ConnectionClosed:
                 return
-            with self._lock:
-                clients.add(websocket)
-        else:
-            # Atomic with broadcasts: a client that received meta must already
-            # be registered before the stepping thread sends its next frame.
-            with self._lock:
-                try:
-                    websocket.send(self._text_payload({"type": "meta", **self._metadata}))
-                except ConnectionClosed:
-                    return
-                clients.add(websocket)
+            clients.add(websocket)
         try:
             try:
                 for _message in websocket:
