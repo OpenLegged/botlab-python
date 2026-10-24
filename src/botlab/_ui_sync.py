@@ -6,7 +6,7 @@ import re
 import shutil
 from pathlib import Path, PurePosixPath
 
-from ._host import BotLabError
+from ._errors import BotLabError
 
 _HTML_REFERENCE = re.compile(r'''(?:src|href)=["']([^"']+)["']''')
 _ASSET_REFERENCE = re.compile(r'''["'`]([^"'`\s]{2,240})["'`]''')

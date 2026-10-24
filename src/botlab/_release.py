@@ -15,7 +15,8 @@ import json
 import zipfile
 from pathlib import Path
 
-from ._host import MOTION_REQUIRED_FILES, BotLabError
+from ._contract import MOTION_REQUIRED_FILES
+from ._errors import BotLabError
 from ._project import MAX_PYTHON_RELEASE_PACKAGE_BYTES, LoadedProject
 
 ASSET_FOLDERS = {

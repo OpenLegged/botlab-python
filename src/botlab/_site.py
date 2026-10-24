@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Any
 
 from ._browser_runtime import ensure_browser_runtime
-from ._host import BotLabError
+from ._errors import BotLabError
 
 MAX_RELEASE_ZIP_BYTES = 200 * 1024 * 1024
 MAX_RELEASE_UNCOMPRESSED_BYTES = 512 * 1024 * 1024

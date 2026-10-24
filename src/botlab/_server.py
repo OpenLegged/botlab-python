@@ -29,37 +29,14 @@ import webbrowser
 from collections.abc import Callable
 from pathlib import Path
 
-from ._host import PRESET_FILE_SUFFIX, BotLabError
+from ._contract import PRESET_FILE_SUFFIX
+from ._errors import BotLabError
 
 CROSS_ORIGIN_ISOLATION_HEADERS = {
     "Cross-Origin-Opener-Policy": "same-origin",
     "Cross-Origin-Embedder-Policy": "require-corp",
     "Cross-Origin-Resource-Policy": "same-origin",
 }
-
-CONTENT_TYPES = {
-    ".html": "text/html; charset=utf-8",
-    ".js": "text/javascript; charset=utf-8",
-    ".mjs": "text/javascript; charset=utf-8",
-    ".css": "text/css; charset=utf-8",
-    ".json": "application/json; charset=utf-8",
-    ".svg": "image/svg+xml",
-    ".wasm": "application/wasm",
-    ".gz": "application/gzip",
-    ".zip": "application/zip",
-    ".png": "image/png",
-    ".webp": "image/webp",
-    ".woff2": "font/woff2",
-    ".xml": "application/xml",
-    ".onnx": "application/octet-stream",
-    ".stl": "application/octet-stream",
-    ".glb": "model/binary",
-    ".bin": "application/octet-stream",
-}
-
-
-def content_type_for(path: Path) -> str:
-    return CONTENT_TYPES.get(path.suffix.lower(), "application/octet-stream")
 
 
 def ui_snapshot_dir() -> Path:

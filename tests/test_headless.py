@@ -244,3 +244,26 @@ def test_run_load_motion_works_after_close_and_cwd_moves(tmp_path: Path, monkeyp
     monkeypatch.chdir(tmp_path)  # away from the project directory
 
     assert run.load_motion("walk.npz")["frame_count"] == 4
+
+
+def test_close_warns_when_pool_cleanup_fails(tmp_path, monkeypatch):
+    from botlab._runtime._processors import _model
+
+    class _Pool:
+        def clear(self):
+            raise RuntimeError("pool boom")
+
+    monkeypatch.setattr(_model, "shared_session_pool", lambda: _Pool())
+    run = HeadlessRun.__new__(HeadlessRun)
+    run._closed = False
+    run._directory = tmp_path
+    run._original_directory = str(Path.cwd())
+    run._original_path = list(__import__("sys").path)
+
+    class _Session:
+        def close(self):
+            pass
+
+    run.session = _Session()
+    with pytest.warns(UserWarning, match="pool cleanup failed"):
+        run.close()

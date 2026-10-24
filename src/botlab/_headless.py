@@ -25,8 +25,10 @@ from __future__ import annotations
 
 import os
 import sys
+import warnings
 from pathlib import Path
 
+from ._errors import BotLabError
 from ._project import evict_project_modules
 
 
@@ -168,8 +170,11 @@ class HeadlessRun:
                 from botlab._runtime._processors._model import shared_session_pool
 
                 shared_session_pool().clear()
-            except Exception:
-                pass  # teardown must never fail on pool cleanup
+            except Exception as error:
+                # Teardown must still evict modules and restore cwd/sys.path,
+                # so report the failure instead of raising from `finally`
+                # (which would also mask a session.close() error).
+                warnings.warn(f"botlab: ONNX session pool cleanup failed: {error!r}", stacklevel=2)
             # Evict the project's modules so the next open_headless (another
             # project, or this one again) re-imports controller.py and its
             # declarations run against the fresh session.
@@ -243,8 +248,12 @@ def open_headless(directory) -> HeadlessRun:
             botlab_host.set_runtime_session(None)
             try:
                 session.close()
-            except Exception:
-                pass
+            except Exception as cleanup_error:
+                # The original error keeps propagating; surface the cleanup one.
+                warnings.warn(
+                    f"botlab: session cleanup after failed open_headless also failed: {cleanup_error!r}",
+                    stacklevel=2,
+                )
         os.chdir(original_directory)
         sys.path[:] = original_path
         raise
@@ -266,8 +275,6 @@ def load_motion(source, project=None) -> dict:
         load_motion_folder,
         load_motion_npz,
     )
-
-    from ._host import BotLabError
 
     raw = Path(source)
     if raw.is_absolute():

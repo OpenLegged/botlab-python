@@ -163,7 +163,7 @@ class DisplayServer:
         for client in clients:
             try:
                 client.send(payload)
-            except Exception:
+            except (ConnectionClosed, OSError):
                 with self._lock:
                     self._clients.discard(client)
 
@@ -214,7 +214,7 @@ class DisplayServer:
         for client in clients:
             try:
                 client.send(frame)
-            except Exception:
+            except (ConnectionClosed, OSError):
                 with self._lock:
                     self._clients.discard(client)
         with self._lock:
@@ -230,7 +230,7 @@ class DisplayServer:
             for client in scene_clients:
                 try:
                     client.send(scene_frame)
-                except Exception:
+                except (ConnectionClosed, OSError):
                     with self._lock:
                         self._scene_clients.discard(client)
 
@@ -243,7 +243,7 @@ class DisplayServer:
         for client in clients:
             try:
                 client.close()
-            except Exception:
+            except (ConnectionClosed, OSError):
                 pass
         self._server = None
         if server is not None:

@@ -15,7 +15,7 @@ import zipfile
 from pathlib import Path, PurePosixPath
 
 from . import __version__
-from ._host import BotLabError
+from ._errors import BotLabError
 from ._ui_sync import localize_index_html
 
 MANIFEST = "botlab-browser-runtime.json"

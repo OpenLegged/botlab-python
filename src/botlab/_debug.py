@@ -18,7 +18,7 @@ import threading
 import time
 from pathlib import Path
 
-from ._host import BotLabError
+from ._errors import BotLabError
 from ._project import LoadedProject, load_project
 from ._release import create_release_package
 
