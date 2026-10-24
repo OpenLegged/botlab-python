@@ -186,7 +186,7 @@ def main(argv: list[str] | None = None) -> int:
         if (out / "browser-cache").exists():
             raise RuntimeError("compilation or native execution acquired a browser runtime")
         if not args.source_wheel:
-            run("native-viewer", [str(cli), "run", str(project), "--no-browser",
+            run("native-viewer", [str(cli), "run", str(project), "--native", "--no-browser",
                                   "--host", "127.0.0.1", "--port", "0"], extra_env=steps_env)
             if (out / "browser-cache").exists():
                 raise RuntimeError("the native viewer acquired a browser runtime")

@@ -1,7 +1,9 @@
 """Local display server tests (tier B: needs websockets)."""
 
 import json
+import threading
 import unittest
+from types import SimpleNamespace
 
 import mujoco  # noqa: E402
 import numpy as np  # noqa: E402
@@ -135,6 +137,60 @@ f 3 1 4
         data = mujoco.MjData(model)
         mujoco.mj_forward(model, data)
         return model, data
+
+    def test_first_frame_is_not_lost_during_initial_message_send(self):
+        for scene in (False, True):
+            with self.subTest(scene=scene):
+                self.assert_initial_message_keeps_first_frame(scene)
+
+    def assert_initial_message_keeps_first_frame(self, scene):
+        server = _display.DisplayServer(
+            {}, scene_provider=SimpleNamespace(
+                payload='{"type":"scene"}', frame_size=11, frame=lambda _: b"scene-frame",
+            ),
+        )
+        messages = []
+        errors = []
+        finished = threading.Event()
+
+        def broadcast():
+            try:
+                server.broadcast(0.5, np.zeros(1), np.zeros(1))
+            except Exception as error:
+                errors.append(error)
+            finally:
+                finished.set()
+
+        worker = threading.Thread(target=broadcast, daemon=True)
+        test = self
+
+        class Client:
+            request = SimpleNamespace(
+                path=f"/display/{server._token}" + ("?scene=1" if scene else ""),
+                headers={},
+            )
+
+            def send(self, payload):
+                messages.append(payload)
+                if isinstance(payload, str):
+                    # Model a receiver starting a step before send returns.
+                    # Without handshake locking, force that step to finish
+                    # before the handler can register this client.
+                    worker.start()
+                    if not server._lock.locked():
+                        test.assertTrue(finished.wait(5))
+
+            def __iter__(self):
+                test.assertTrue(finished.wait(5))
+                return iter(())
+
+        server._handler(Client())
+        worker.join(timeout=5)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(errors, [])
+        self.assertEqual(len(messages), 2)
+        self.assertIsInstance(messages[0], str)
+        self.assertIsInstance(messages[1], bytes)
 
     def test_scene_exports_parser_model_and_world_transforms(self):
         model, data = self.model_and_data()
