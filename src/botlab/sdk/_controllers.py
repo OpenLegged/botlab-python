@@ -61,6 +61,12 @@ class PolicyController(Controller):
             )
         else:
             target = _as_signal(target, "PolicyController target")
+            dynamic_gains = {}
+            gain_inputs = []
+            for name, value in (("kps", kp), ("kds", kd)):
+                if isinstance(value, Signal):
+                    dynamic_gains[f"{name}InputSlot"] = 3 + len(gain_inputs)
+                    gain_inputs.append(value)
             explicit_pd_values = (kp, kd, effort_limit)
             dimension = (
                 robot.action_dimension()
@@ -74,12 +80,12 @@ class PolicyController(Controller):
                     "pdType": "position",
                     "kps": (
                         robot.kp
-                        if kp is None
+                        if kp is None or isinstance(kp, Signal)
                         else _policy_pd_vector(kp, dimension, "PolicyController kp")
                     ),
                     "kds": (
                         robot.kd
-                        if kd is None
+                        if kd is None or isinstance(kd, Signal)
                         else _policy_pd_vector(kd, dimension, "PolicyController kd")
                     ),
                     "effortLimit": (
@@ -95,11 +101,13 @@ class PolicyController(Controller):
                         robot.id,
                         "actuatorJointOrder",
                     ),
+                    **dynamic_gains,
                 },
                 (
                     target,
                     robot.joint_position(order="native", _label="pd-joint-position"),
                     robot.joint_velocity(order="native", _label="pd-joint-velocity"),
+                    *gain_inputs,
                 ),
             )
             sink = Signal("out-mujoco", "controller", {}, (pd,))

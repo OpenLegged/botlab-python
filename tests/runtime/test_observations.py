@@ -374,6 +374,20 @@ class RotatedStateTest(unittest.TestCase):
             self.value("obs-base-ang-vel"), [0, -0.1, 0], atol=1e-6
         )
 
+    def test_obs_base_ang_vel_explicit_body_frame_matches_real_gyro(self):
+        np.testing.assert_allclose(
+            self.value("obs-base-ang-vel", {"rootAngularVelocityFrame": "body"}),
+            self.data.sensordata[4:7],
+            atol=1e-6,
+        )
+        np.testing.assert_allclose(
+            self.value("obs-base-ang-vel", {"rootAngularVelocityFrame": "body", "scale": 0.25}),
+            [0.025, 0, 0],
+            atol=1e-6,
+        )
+        with self.assertRaisesRegex(ValueError, "rootAngularVelocityFrame must be body"):
+            self.value("obs-base-ang-vel", {"rootAngularVelocityFrame": "unknown"})
+
     def test_obs_base_lin_vel_inverse_rotates_root_qvel(self):
         np.testing.assert_allclose(
             self.value("obs-base-lin-vel"), [0, -0.2, 0], atol=1e-6

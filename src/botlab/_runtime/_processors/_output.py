@@ -612,6 +612,27 @@ class _PDController:
         np.clip(tau, self._effort_min64, self._effort_max64, out=tau)
         output[:] = tau
 
+    def update_gains(self, kps=None, kds=None):
+        for name, values in (("kps", kps), ("kds", kds)):
+            if values is None:
+                continue
+            if len(values) != self._dof_count:
+                raise ValueError(
+                    f"[{self._context}] {name} input must contain exactly "
+                    f"{self._dof_count} values"
+                )
+            for index, value in enumerate(values):
+                if not math.isfinite(float(value)) or value < 0:
+                    raise ValueError(
+                        f"[{self._context}] {name} input[{index}] must be finite and >= 0"
+                    )
+        if kps is not None:
+            self._kps[:] = kps
+            self._kps64[:] = self._kps
+        if kds is not None:
+            self._kds[:] = kds
+            self._kds64[:] = self._kds
+
 
 def _resolve_pd_type(config):
     raw = config.get("pdType")
@@ -655,6 +676,23 @@ def _optional_index_list(raw, name, length):
     return values.astype(np.int32)
 
 
+def _gain_input_slot(config, name, input_dims, dof):
+    if name not in config:
+        return None
+    raw = config[name]
+    if (
+        not isinstance(raw, (int, float)) or isinstance(raw, bool)
+        or not math.isfinite(raw) or raw != math.floor(raw) or raw < 3
+    ):
+        raise ValueError(f"[PDProcessor] {name} must be an input slot >= 3")
+    slot = int(raw)
+    if slot >= len(input_dims) or input_dims[slot] != dof:
+        raise ValueError(
+            f"[PDProcessor] {name} input must contain exactly {dof} values"
+        )
+    return slot
+
+
 class PDProcessor:
     """Position / velocity / effort PD output with an optional substep view."""
 
@@ -670,6 +708,8 @@ class PDProcessor:
         self._qpos_indices = None
         self._qvel_indices = None
         self._ctrl_indices = None
+        self._kps_input_slot = None
+        self._kds_input_slot = None
         self._vel_kps64 = np.zeros(0, dtype=np.float64)
         self._effort_min64 = np.zeros(0, dtype=np.float64)
         self._effort_max64 = np.zeros(0, dtype=np.float64)
@@ -699,6 +739,10 @@ class PDProcessor:
             )
         self._dof_count = target_dim
         self._controller.init(config, target_dim, "PDProcessor")
+        self._kps_input_slot = _gain_input_slot(config, "kpsInputSlot", input_dims, target_dim)
+        self._kds_input_slot = _gain_input_slot(config, "kdsInputSlot", input_dims, target_dim)
+        if self._kps_input_slot is not None and self._kps_input_slot == self._kds_input_slot:
+            raise ValueError("[PDProcessor] kpsInputSlot and kdsInputSlot must be distinct")
         self._target_dof_pos = np.zeros(target_dim, dtype=np.float32)
         self._target_blend_start = np.zeros(target_dim, dtype=np.float32)
         self._target_blend_steps = _optional_non_negative_integer(
@@ -789,10 +833,21 @@ class PDProcessor:
             raise ValueError(
                 "[PDProcessor] Missing required inputs for position PD"
             )
+        kps = self._gain_input(inputs, self._kps_input_slot, "kps")
+        kds = self._gain_input(inputs, self._kds_input_slot, "kds")
+        if kps is not None or kds is not None:
+            self._controller.update_gains(kps, kds)
         effective_target = self._position_target(target, qpos)
         self._controller.compute(
             effective_target, qpos, qvel, self.output_buffers[0]
         )
+
+    def _gain_input(self, inputs, slot, name):
+        if slot is None:
+            return None
+        if slot >= len(inputs) or inputs[slot] is None:
+            raise ValueError(f"[PDProcessor] Missing {name} input at slot {slot}")
+        return inputs[slot]
 
     def _position_target(self, target, qpos):
         if self._target_blend_steps <= 0:

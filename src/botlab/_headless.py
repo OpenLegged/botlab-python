@@ -261,6 +261,7 @@ def load_motion(source, project=None) -> dict:
     :meth:`HeadlessRun.load_motion` forwards it for you.
     """
     from botlab._runtime._motion import (
+        MOTION_METADATA_FILE,
         MOTION_REQUIRED_FILES,
         load_motion_folder,
         load_motion_npz,
@@ -292,6 +293,9 @@ def load_motion(source, project=None) -> dict:
                 f"required .bin files ({', '.join(MOTION_REQUIRED_FILES)})."
             )
         files = {name: (path / name).read_bytes() for name in MOTION_REQUIRED_FILES}
+        metadata_path = path / MOTION_METADATA_FILE
+        if metadata_path.is_file():
+            files[MOTION_METADATA_FILE] = metadata_path.read_bytes()
         return load_motion_folder(files, str(path))
     if path.suffix.lower() == ".npz":
         return load_motion_npz(path.read_bytes(), str(path))

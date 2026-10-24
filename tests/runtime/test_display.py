@@ -1,11 +1,14 @@
 """Local display server tests (tier B: needs websockets)."""
 
 import json
+import threading
 import unittest
+from unittest import mock
 
 import mujoco  # noqa: E402
 import numpy as np  # noqa: E402
 from websockets.sync.client import connect  # noqa: E402
+from websockets.sync.server import ServerConnection  # noqa: E402
 
 from botlab._runtime import _display  # noqa: E402
 from botlab._runtime.mujoco_scene import MujocoSceneProvider  # noqa: E402
@@ -38,6 +41,59 @@ class DisplayServerTest(unittest.TestCase):
             np.testing.assert_allclose(
                 values, [1.25, 1.0, 2.0, 3.0, 0.5, -0.5], rtol=0, atol=0
             )
+
+    def test_broadcast_during_metadata_send_keeps_the_first_state_frame(self):
+        server = self.start_server()
+        metadata_sent = threading.Event()
+        release_metadata = threading.Event()
+        broadcast_reached_lock = threading.Event()
+        original_send = ServerConnection.send
+        original_lock = server._lock
+        broadcaster = threading.Thread(
+            target=server.broadcast,
+            args=(1.25, np.array([1, 2, 3]), np.array([0.5, -0.5])),
+        )
+
+        class ObservedLock:
+            def __enter__(self):
+                # Signal after trying the real lock: on the broken path the
+                # broadcaster owns it before the handler can register.
+                acquired = original_lock.acquire(blocking=False)
+                if threading.current_thread() is broadcaster:
+                    broadcast_reached_lock.set()
+                if not acquired:
+                    original_lock.acquire()
+
+            def __exit__(self, *_args):
+                original_lock.release()
+
+        def pause_after_metadata(connection, message, *args, **kwargs):
+            result = original_send(connection, message, *args, **kwargs)
+            if isinstance(message, str) and json.loads(message)["type"] == "meta":
+                metadata_sent.set()
+                if not release_metadata.wait(timeout=5):
+                    raise TimeoutError("metadata handshake was not released")
+            return result
+
+        server._lock = ObservedLock()
+        with mock.patch.object(ServerConnection, "send", pause_after_metadata):
+            try:
+                with connect(server.url) as client:
+                    self.assertEqual(json.loads(client.recv(timeout=5))["type"], "meta")
+                    self.assertTrue(metadata_sent.wait(timeout=5))
+                    broadcaster.start()
+                    self.assertTrue(broadcast_reached_lock.wait(timeout=5))
+                    release_metadata.set()
+                    broadcaster.join(timeout=5)
+                    self.assertFalse(broadcaster.is_alive())
+                    np.testing.assert_array_equal(
+                        np.frombuffer(client.recv(timeout=5), dtype="<f4"),
+                        [1.25, 1, 2, 3, 0.5, -0.5],
+                    )
+            finally:
+                release_metadata.set()
+                if broadcaster.ident is not None:
+                    broadcaster.join(timeout=5)
 
     def test_metrics_and_diagnostics_are_typed_json_messages(self):
         server = self.start_server()

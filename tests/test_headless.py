@@ -166,6 +166,34 @@ def test_load_motion_reads_both_layouts(tmp_path: Path):
     assert folder["fps"] == npz["fps"] == 50.0
 
 
+@pytest.mark.parametrize("with_metadata", [False, True])
+def test_folder_names_match_sdk_and_public_motion_loading(pendulum_project: Path, with_metadata):
+    import asyncio
+    import importlib
+    import json
+
+    import numpy as np
+
+    folder = pendulum_project / "folder"
+    write_motion_folder(folder)
+    expected = {"body_names": ["root", "foot"], "joint_names": ["hip", "knee", "ankle"]}
+    if with_metadata:
+        (folder / "metadata.json").write_text(json.dumps(expected), encoding="utf-8")
+    controller = pendulum_project / "controller.py"
+    controller.write_text(controller.read_text() + '\nfrom botlab import Motion\nreference = Motion("folder")\n')
+    with open_headless(pendulum_project) as run:
+        sdk_motion = asyncio.run(importlib.import_module("controller").reference.load())
+        public_motion = load_motion(folder)
+        run_motion = run.load_motion("folder")
+        for key, names in expected.items():
+            if with_metadata:
+                assert sdk_motion[key] == public_motion[key] == run_motion[key] == names
+            else:
+                assert key not in sdk_motion and key not in public_motion and key not in run_motion
+        np.testing.assert_array_equal(sdk_motion["joint_position"], public_motion["joint_position"])
+        np.testing.assert_array_equal(sdk_motion["body_quaternion"], run_motion["body_quaternion"])
+
+
 def test_close_evicts_cached_model_sessions(tmp_path: Path):
     """The session pool keys by resource id, not file contents — a run that
     closes must leave nothing behind, or the next project with the same

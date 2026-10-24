@@ -414,7 +414,7 @@ class LocalRuntimeSession:
     def readMujoco(self, robot_id, query, target=None, start=None, length=None):
         return self._physics.read_mujoco(robot_id, query, target, start, length)
 
-    def loadMotion(self, motion_id):
+    async def loadMotion(self, motion_id):
         return self._physics.load_motion(motion_id)
 
     def updateHeightfield(self, terrain_id, heights):

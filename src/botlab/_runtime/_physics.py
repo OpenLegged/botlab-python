@@ -955,7 +955,12 @@ class MujocoPhysics:
         return np.asarray(values, dtype=np.float64).tolist()
 
     def load_motion(self, motion_id):
-        from ._motion import MOTION_REQUIRED_FILES, load_motion_folder, load_motion_npz
+        from ._motion import (
+            MOTION_METADATA_FILE,
+            MOTION_REQUIRED_FILES,
+            load_motion_folder,
+            load_motion_npz,
+        )
 
         resource = self._resources.get(str(motion_id))
         if resource is not None:
@@ -982,6 +987,10 @@ class MujocoPhysics:
                     )
                 with open(file_path, "rb") as handle:
                     files[name] = handle.read()
+            metadata_path = os.path.join(path, MOTION_METADATA_FILE)
+            if os.path.isfile(metadata_path):
+                with open(metadata_path, "rb") as handle:
+                    files[MOTION_METADATA_FILE] = handle.read()
             return load_motion_folder(files, path)
         if not os.path.isfile(path):
             raise ValueError(f'[botlab] motion source "{source}" was not found')

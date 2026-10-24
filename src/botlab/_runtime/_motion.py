@@ -12,11 +12,11 @@ page-lifetime concern owned by the TS host.
 Output dicts follow the ``loadPythonMotion`` contract in
 src/domain/python/botlabBridge.ts: snake_case keys with flat float32 numpy
 buffers plus optional ``joint_names``/``body_names`` lists when the motion
-format declares them (NPZ variant only — the .bin folder variant has no
-names files on the TS side either).
+format declares them (NPZ arrays or a .bin folder's optional metadata.json).
 """
 
 import io
+import json
 import struct
 import zipfile
 from collections import namedtuple
@@ -32,6 +32,7 @@ MOTION_REQUIRED_FILES = (
     "joint_vel.bin",
     "fps.bin",
 )
+MOTION_METADATA_FILE = "metadata.json"
 
 # (file name, output key, finite-check label) in the TS copy/finite-check order.
 _FOLDER_FLOAT_FILES = (
@@ -125,8 +126,8 @@ def load_motion_folder(files, source="inline:motion"):
     Mirrors the inline branch of loadMotionData in motionReference.ts: the
     six channel buffers must be float ('f') .bin arrays with consistent
     frame/body/dof shapes, fps must be a single int64 ('l') value, and every
-    buffer value must be finite. The folder variant carries no names —
-    joint_names/body_names never appear in its output, like on the TS side.
+    buffer value must be finite. Optional metadata.json supplies explicit
+    joint_names/body_names without changing legacy seven-file loading.
     """
     arrays = {}
     for file_name in MOTION_REQUIRED_FILES:
@@ -167,13 +168,32 @@ def load_motion_folder(files, source="inline:motion"):
     for _, output_key, label in _FOLDER_FLOAT_FILES:
         _assert_finite(buffers[output_key], label)
 
-    return {
+    result = {
         "frame_count": frame_count,
         "body_count": body_count,
         "dof_count": dof_count,
         "fps": fps_value,
         **buffers,
     }
+    if MOTION_METADATA_FILE in files:
+        metadata = json.loads(bytes(files[MOTION_METADATA_FILE]).decode("utf-8"))
+        if not isinstance(metadata, dict):
+            raise ValueError("[motionReference] metadata.json must be an object")
+        for key, count in (("body_names", body_count), ("joint_names", dof_count)):
+            if key not in metadata:
+                continue
+            names = metadata[key]
+            if (
+                not isinstance(names, list)
+                or len(names) != count
+                or any(not isinstance(name, str) or not name.strip() for name in names)
+                or len(set(names)) != len(names)
+            ):
+                raise ValueError(
+                    f"[motionReference] metadata {key} must contain {count} unique non-empty names"
+                )
+            result[key] = names
+    return result
 
 
 def _read_npy(payload, source):
