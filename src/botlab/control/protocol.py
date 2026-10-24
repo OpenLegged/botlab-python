@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
+from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 API_VERSION = 1
@@ -11,6 +14,19 @@ PROTOCOL = "botlab-control"
 API_PREFIX = "/control/v1"
 TERMINAL = frozenset({"completed", "cancelled", "failed", "expired"})
 FAILED = frozenset({"cancelled", "failed", "expired"})
+COMMAND_STATUSES = frozenset({"accepted", "applied"}) | TERMINAL
+
+# Frozen v1 submission envelope. Extensions never add fields here: hosted
+# identity and routing information travels in discovery descriptors and /info
+# instead, so v1 envelopes stay identical across client and middleware releases.
+ENVELOPE_FIELDS = frozenset({"request_id", "instance_id", "session_id", "episode_id",
+                             "capabilities_revision", "capability", "args"})
+IDENTITY_FIELDS = ENVELOPE_FIELDS - {"args"}
+MAX_REQUEST_ID = 128
+
+# Optional protocol extensions a middleware may declare in /info. Clients must
+# ignore extensions they do not understand; local v1 declares none.
+PROTOCOL_EXTENSIONS: tuple[str, ...] = ()
 
 
 class ControlError(Exception):
@@ -47,6 +63,11 @@ def identifier(value: Any, name: str) -> str:
     if not isinstance(value, str) or not value or len(value) > 256:
         raise ControlError("invalid_identity", f"{name} must be a nonempty string (up to 256 characters).")
     return value
+
+
+def project_key(project: str | Path) -> str:
+    """Stable short identity of a project checkout location."""
+    return hashlib.sha256(str(Path(project).resolve()).encode()).hexdigest()[:16]
 
 
 def validate_capabilities(payload: dict) -> list[dict]:
@@ -133,3 +154,21 @@ def _validate_args(value: Any, schema: dict, path: str) -> None:
             raise ControlError("invalid_args", f"{path} is outside the declared range.")
         if value <= schema.get("exclusiveMinimum", -math.inf) or value >= schema.get("exclusiveMaximum", math.inf):
             raise ControlError("invalid_args", f"{path} is outside the declared range.")
+
+
+def validate_envelope(body: Any, *, error: Callable[..., ControlError] = ControlError) -> dict:
+    """Check the frozen v1 submission envelope: the complete field set, nonempty
+    identity strings, a bounded request_id and finite JSON values. ``error``
+    lets a server integration raise its own exception type while the wire
+    contract stays single-sourced here."""
+    if not isinstance(body, dict) or set(body) != set(ENVELOPE_FIELDS):
+        raise error("invalid_parameter", "Expected the complete control command envelope")
+    if any(not isinstance(body[key], str) or not body[key] for key in IDENTITY_FIELDS):
+        raise error("invalid_parameter", "Identity and capability fields must be nonempty strings")
+    if len(body["request_id"]) > MAX_REQUEST_ID:
+        raise error("invalid_parameter", f"request_id must be at most {MAX_REQUEST_ID} characters")
+    try:
+        json.dumps(body, allow_nan=False)
+    except (ValueError, TypeError) as envelope_error:
+        raise error("invalid_parameter", "Arguments must contain finite JSON values") from envelope_error
+    return body

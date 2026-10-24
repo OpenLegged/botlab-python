@@ -14,6 +14,7 @@ from .discovery import descriptors, local_endpoint, project_key, public_descript
 from .protocol import (
     API_PREFIX,
     API_VERSION,
+    COMMAND_STATUSES,
     PROTOCOL,
     ControlError,
     identifier,
@@ -174,8 +175,7 @@ class ControlClient:
             raise ControlError("wrong_instance", "Command response belongs to another middleware instance.")
         if command.get("command_id") != command_id:
             raise ControlError("wrong_command", "Response does not match the requested command ID.")
-        statuses = {"accepted", "applied", "completed", "cancelled", "failed", "expired"}
-        if command.get("status") not in statuses:
+        if command.get("status") not in COMMAND_STATUSES:
             raise ControlError("invalid_protocol", "Middleware returned an unknown command status.")
         terminal = command["status"] in {"completed", "cancelled", "failed", "expired"}
         if command.get("terminal") is not terminal:

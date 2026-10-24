@@ -11,11 +11,7 @@ import tempfile
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from .protocol import API_VERSION, PROTOCOL, ControlError, identifier, parse_json
-
-
-def project_key(project: str | Path) -> str:
-    return hashlib.sha256(str(Path(project).resolve()).encode()).hexdigest()[:16]
+from .protocol import API_VERSION, PROTOCOL, ControlError, identifier, parse_json, project_key
 
 
 def runtime_dir() -> Path:
