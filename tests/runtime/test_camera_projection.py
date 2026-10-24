@@ -1,6 +1,8 @@
 """Shared pinhole golden rays and real rendered depth, without policy weights."""
 import json
 import math
+import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -65,11 +67,29 @@ def test_native_pixel_rays_without_gl(fixture):
 
 @pytest.mark.parametrize("fixture", GOLDEN["cases"], ids=lambda item: item["name"])
 def test_native_rendered_depth(fixture):
+    # A missing/broken GL context can abort native code, bypassing try/except
+    # and poisoning subsequent Renderer attempts. Keep GL outside pytest.
+    result = subprocess.run(
+        [sys.executable, __file__, fixture["name"]],
+        capture_output=True, text=True, timeout=30,
+    )
+    ready = "BOTLAB_RENDERER_READY" in result.stdout
+    if not ready and (result.returncode == 77 or result.returncode < 0):
+        pytest.skip(
+            f"MuJoCo GL renderer unavailable (probe exit {result.returncode}); "
+            f"set MUJOCO_GL=egl. {result.stdout[-1000:]} {result.stderr[-1000:]}"
+        )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def render_depth_case(fixture):
     model, data, config = camera_scene(fixture)
     try:
         renderer = mujoco.Renderer(model, width=config["fullWidth"], height=config["fullHeight"])
     except Exception as error:
-        pytest.skip(f"MuJoCo GL renderer unavailable ({error}); set MUJOCO_GL=egl")
+        print(f"MuJoCo GL renderer unavailable: {error}", flush=True)
+        raise SystemExit(77) from error
+    print("BOTLAB_RENDERER_READY", flush=True)
     with renderer:
         obs._camera_render(renderer, model, data, config)
         renderer.enable_depth_rendering()
@@ -78,3 +98,11 @@ def test_native_rendered_depth(fixture):
         expected = 2 / (1 - math.tan(0.3) * np.asarray(fixture["rays"])[:, 0])
         # macOS GL lacks ARB_clip_control; depth quantization at 2 m is ~60 um.
         np.testing.assert_allclose(crop.reshape(-1), expected, atol=1e-4, rtol=0)
+
+
+if __name__ == "__main__":
+    # Do not leave large core dumps when a headless GL driver aborts.
+    if sys.platform != "win32":
+        import resource
+        resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+    render_depth_case(next(case for case in GOLDEN["cases"] if case["name"] == sys.argv[1]))
