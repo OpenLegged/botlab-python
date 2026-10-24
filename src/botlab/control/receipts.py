@@ -8,7 +8,7 @@ import os
 import tempfile
 from pathlib import Path
 
-from .discovery import local_endpoint, private_directory, private_file, project_key
+from .discovery import endpoint, private_directory, private_file, project_key
 from .protocol import ControlError, identifier, parse_json
 
 
@@ -43,17 +43,17 @@ class Receipts:
                 identifier(envelope.get(key), key)
             if not isinstance(envelope.get("args"), dict) or not isinstance(receipt.get("intent"), dict):
                 raise ControlError("invalid_receipt", "Request receipt is incomplete.")
-            local_endpoint(receipt.get("endpoint"))
+            endpoint(receipt.get("endpoint"))
             return receipt
         except OSError as error:
             raise ControlError("receipt_unavailable", "Cannot read the original request receipt.") from error
 
-    def save(self, envelope: dict, endpoint: str, intent: dict, *,
+    def save(self, envelope: dict, origin: str, intent: dict, *,
              control_generation: int | str | None = None) -> tuple[dict, bool]:
         """Publish completely written data with a no-overwrite atomic hard link."""
         request_id = envelope["request_id"]
         receipt = {"schema": 1, "project": self.project, "project_key": self.project_key,
-                   "endpoint": local_endpoint(endpoint), "intent": intent, "envelope": envelope}
+                   "endpoint": endpoint(origin), "intent": intent, "envelope": envelope}
         if control_generation is not None:
             receipt["control_generation"] = control_generation
         temporary = None

@@ -19,17 +19,34 @@ def runtime_dir() -> Path:
     return Path(os.environ.get("BOTLAB_CONTROL_RUNTIME_DIR", Path(tempfile.gettempdir()) / f"botlab-control-{user}"))
 
 
-def local_endpoint(value: str) -> str:
+def endpoint(value: str) -> str:
+    """Accept loopback HTTP origins (local middleware) and HTTPS origins
+    (remote middleware behind TLS); plaintext HTTP never leaves the loopback."""
     try:
         parsed = urlsplit(value)
         host = parsed.hostname
-        loopback = host == "localhost" or (host is not None and ipaddress.ip_address(host).is_loopback)
-        if (parsed.scheme != "http" or not loopback or parsed.username is not None
-                or parsed.password is not None or parsed.query or parsed.fragment
-                or parsed.path not in ("", "/") or not parsed.port):
+        if not host:
+            raise ValueError()
+        try:
+            loopback = host == "localhost" or ipaddress.ip_address(host).is_loopback
+        except ValueError:
+            loopback = False
+        if (parsed.username is not None or parsed.password is not None
+                or parsed.query or parsed.fragment or parsed.path not in ("", "/")):
+            raise ValueError()
+        if parsed.scheme == "http":
+            if not loopback or not parsed.port:
+                raise ValueError()
+        elif parsed.scheme == "https":
+            port = parsed.port  # Accessing .port rejects malformed ports.
+            if port is not None and not 1 <= port <= 65535:
+                raise ValueError()
+        else:
             raise ValueError()
     except (ValueError, TypeError) as error:
-        raise ControlError("invalid_endpoint", "Endpoint must be a local loopback HTTP origin with an explicit port.") from error
+        raise ControlError("invalid_endpoint",
+                           "Endpoint must be a loopback HTTP origin or an HTTPS origin, without "
+                           "credentials, path, query or fragment.") from error
     return value.rstrip("/")
 
 
@@ -67,10 +84,19 @@ def descriptors(project: str | Path) -> list[dict]:
                 continue
             if item.get("schema") != 1 or item.get("api_version") != API_VERSION or item.get("protocol") != PROTOCOL:
                 continue
-            if item.get("project_key") != project_key(project) or item.get("project") != str(Path(project).resolve()):
+            remote = item.get("remote") is True
+            if remote:
+                # Enrolled remote descriptors pin the hosted identity that
+                # /info reported at enrollment; the client verifies the pin.
+                if (not isinstance(item.get("project_key"), str) or not item["project_key"]
+                        or not isinstance(item.get("project"), str) or not item["project"]):
+                    continue
+            elif item.get("project_key") != project_key(project) or item.get("project") != str(Path(project).resolve()):
                 continue
             identifier(item.get("instance_id"), "instance_id")
-            item["endpoint"] = local_endpoint(item.get("endpoint"))
+            item["endpoint"] = endpoint(item.get("endpoint"))
+            if remote and urlsplit(item["endpoint"]).scheme != "https":
+                continue
             token = item.get("token")
             if not isinstance(token, str) or not token or "\n" in token or "\r" in token:
                 continue

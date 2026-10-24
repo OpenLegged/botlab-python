@@ -17,7 +17,7 @@ import pytest
 
 from botlab.control import client as transport
 from botlab.control.cli import main
-from botlab.control.discovery import local_endpoint, project_key
+from botlab.control.discovery import endpoint, project_key
 from botlab.control.protocol import ControlError
 from botlab.control.receipts import Receipts
 
@@ -405,11 +405,13 @@ def test_connection_token_requires_explicit_flag(middleware):
     assert invoke("connection", "--show-token")[1]["token"] == "test-token"
 
 
-@pytest.mark.parametrize("endpoint", ["https://127.0.0.1:80", "http://example.com:80", "http://127.0.0.1:80/path",
-                                      "http://user:secret@127.0.0.1:80", "http://127.0.0.1:80?token=x", "http://127.0.0.1:80#x"])
-def test_endpoint_never_exposes_auth_to_remote_or_redirect(endpoint):
+@pytest.mark.parametrize("origin", ["http://example.com:80", "http://10.0.0.5:8776", "http://127.0.0.1:80/path",
+                                    "http://user:secret@127.0.0.1:80", "http://127.0.0.1:80?token=x",
+                                    "http://127.0.0.1:80#x", "https://user:secret@example.com",
+                                    "ftp://127.0.0.1:80", "http://127.0.0.1", "https://:443"])
+def test_endpoint_never_exposes_auth_to_remote_or_redirect(origin):
     with pytest.raises(ControlError):
-        local_endpoint(endpoint)
+        endpoint(origin)
 
 
 def test_unsafe_discovery_file_is_not_trusted(middleware):

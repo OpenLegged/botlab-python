@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import argparse
+import getpass
 import json
 import math
+import os
 import sys
 from pathlib import Path
 
@@ -20,7 +22,8 @@ class _Parser(argparse.ArgumentParser):
 def _common(parser: argparse.ArgumentParser, *, subcommand: bool = False) -> None:
     default = argparse.SUPPRESS if subcommand else None
     parser.add_argument("--project", default=argparse.SUPPRESS if subcommand else ".", help="project directory (default: cwd)")
-    parser.add_argument("--endpoint", default=default, help="explicit loopback middleware HTTP origin")
+    parser.add_argument("--endpoint", default=default,
+                        help="explicit middleware origin (loopback http, or https for enrolled remote middleware)")
     parser.add_argument("--instance", default=default, help="bind a middleware instance")
     parser.add_argument("--session", default=default, help="bind a runtime session")
     parser.add_argument("--json", action="store_true", default=argparse.SUPPRESS if subcommand else False,
@@ -31,7 +34,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = _Parser(prog="botlab control", description="Use any project middleware implementing Control API v1.")
     _common(parser)
     subparsers = parser.add_subparsers(dest="command", required=True)
-    for name in ("instances", "capabilities", "sessions", "state", "connection", "call", "move", "action", "wait", "retry", "stop"):
+    for name in ("instances", "capabilities", "sessions", "state", "connection", "enroll", "call", "move", "action", "wait", "retry", "stop"):
         sub = subparsers.add_parser(name)
         _common(sub, subcommand=True)
         if name in {"call", "move", "action", "stop"}:
@@ -62,6 +65,11 @@ def run(args: argparse.Namespace) -> dict:
         return getattr(client, args.command)()
     if args.command == "connection":
         return client.connection(args.show_token)
+    if args.command == "enroll":
+        if not args.endpoint:
+            raise ControlError("invalid_arguments", "enroll requires --endpoint <https origin>.")
+        token = os.environ.get("BOTLAB_CONTROL_TOKEN") or getpass.getpass("Middleware token: ")
+        return client.enroll(args.endpoint, token)
     if args.command == "retry":
         return client.retry(args.id)
     if args.command == "wait":

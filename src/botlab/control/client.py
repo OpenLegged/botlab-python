@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import json
+import os
+import ssl
 import uuid
 from http.client import HTTPException
 from pathlib import Path
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote, urlencode
-from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
+from urllib.parse import quote, urlencode, urlsplit
+from urllib.request import HTTPRedirectHandler, HTTPSHandler, ProxyHandler, Request, build_opener
 
-from .discovery import descriptors, local_endpoint, project_key, public_descriptor
+from .discovery import descriptors, private_directory, project_key, public_descriptor, runtime_dir
+from .discovery import endpoint as normalize_endpoint
 from .protocol import (
     API_PREFIX,
     API_VERSION,
@@ -31,13 +34,17 @@ class _NoRedirects(HTTPRedirectHandler):
 
 
 def request(descriptor: dict, path: str, body: dict | None = None, timeout: float = 5) -> dict:
-    endpoint = local_endpoint(descriptor["endpoint"])
+    origin = normalize_endpoint(descriptor["endpoint"])
     data = None if body is None else json.dumps(body, allow_nan=False).encode()
     headers = {"Authorization": f"Bearer {descriptor['token']}", "Accept": "application/json"}
     if data is not None:
         headers["Content-Type"] = "application/json"
-    req = Request(endpoint + API_PREFIX + path, data=data, headers=headers)
-    opener = build_opener(ProxyHandler({}), _NoRedirects())
+    req = Request(origin + API_PREFIX + path, data=data, headers=headers)
+    handlers = [ProxyHandler({}), _NoRedirects()]
+    cafile = os.environ.get("BOTLAB_CONTROL_CA_BUNDLE")
+    if cafile:
+        handlers.append(HTTPSHandler(context=ssl.create_default_context(cafile=cafile)))
+    opener = build_opener(*handlers)
     status = 200
     try:
         try:
@@ -75,7 +82,7 @@ class ControlClient:
                  instance: str | None = None, session: str | None = None):
         self.project = str(Path(project).resolve())
         self.project_key = project_key(project)
-        self.endpoint = local_endpoint(endpoint) if endpoint else None
+        self.endpoint = normalize_endpoint(endpoint) if endpoint else None
         self.instance = instance
         self.session = session
         self.receipts = Receipts(project)
@@ -85,7 +92,13 @@ class ControlClient:
         info = request(descriptor, "/info")
         if info.get("api_version") != API_VERSION or info.get("protocol") != PROTOCOL:
             raise ControlError("unsupported_version", "Middleware does not implement Control API v1.")
-        if info.get("project_key") != self.project_key or info.get("project") != self.project:
+        if descriptor.get("remote") is True:
+            # Enrolled identity pin: compare against what /info reported at
+            # enrollment, not against this checkout's local path.
+            if (info.get("project_key") != descriptor.get("project_key")
+                    or not isinstance(info.get("project"), str) or not info["project"]):
+                raise ControlError("wrong_project", "Middleware identity no longer matches the enrolled descriptor.")
+        elif info.get("project_key") != self.project_key or info.get("project") != self.project:
             raise ControlError("wrong_project", "Middleware belongs to a different project.")
         if info.get("instance_id") != descriptor["instance_id"]:
             raise ControlError("wrong_instance", "Middleware instance changed; the original command must not be replayed.")
@@ -103,6 +116,48 @@ class ControlClient:
                 item["error"] = error.payload()["error"]
             items.append(item)
         return {"ok": True, "project_key": self.project_key, "instances": items}
+
+    def enroll(self, target: str, token: str) -> dict:
+        """Bind a remote HTTPS middleware to this project by pinning the
+        identity /info reports into a private discovery descriptor."""
+        origin = normalize_endpoint(target)
+        if urlsplit(origin).scheme != "https":
+            raise ControlError("invalid_endpoint", "Enrollment requires an HTTPS middleware origin.")
+        if not isinstance(token, str) or not token or "\n" in token or "\r" in token:
+            raise ControlError("invalid_credentials", "A nonempty middleware token is required.")
+        info = request({"endpoint": origin, "token": token}, "/info")
+        if info.get("api_version") != API_VERSION or info.get("protocol") != PROTOCOL:
+            raise ControlError("unsupported_version", "Middleware does not implement Control API v1.")
+        identifier(info.get("instance_id"), "instance_id")
+        pinned_key, pinned_project = info.get("project_key"), info.get("project")
+        if not isinstance(pinned_key, str) or not pinned_key or not isinstance(pinned_project, str) or not pinned_project:
+            raise ControlError("invalid_protocol", "Middleware did not report a project identity to pin.")
+        descriptor = {"schema": 1, "api_version": API_VERSION, "protocol": PROTOCOL, "remote": True,
+                      "endpoint": origin, "websocket": "wss" + origin[len("https"):] + "/runtime",
+                      "project": pinned_project, "project_key": pinned_key,
+                      "instance_id": info["instance_id"], "token": token}
+        root, directory = runtime_dir(), runtime_dir() / self.project_key
+        private_directory(root, create=True)
+        private_directory(directory, create=True)
+        for path in sorted(directory.glob("*.json")):
+            try:
+                existing = parse_json(path.read_text())
+            except (OSError, ControlError):
+                continue
+            # Re-enrollment replaces this endpoint's previous instance pin.
+            if isinstance(existing, dict) and existing.get("remote") is True and existing.get("endpoint") == origin:
+                path.unlink()
+        descriptor_path = directory / f"{descriptor['instance_id']}.json"
+        try:
+            fd = os.open(descriptor_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError as error:
+            raise ControlError("instance_conflict",
+                               "A different endpoint already enrolled this instance identity; "
+                               "remove that descriptor before enrolling this endpoint.") from error
+        with os.fdopen(fd, "w") as stream:
+            json.dump(descriptor, stream)
+        return {"ok": True, **public_descriptor(descriptor), "websocket": descriptor["websocket"],
+                "pairing": "Remote middleware enrolled; identity pinned to this project."}
 
     def select(self) -> dict:
         if self._selected is not None:

@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from botlab.control import protocol
+from botlab.control.discovery import endpoint
 
 
 def envelope(**overrides) -> dict:
@@ -80,6 +81,34 @@ class TestValidateEnvelope:
         with pytest.raises(ServiceError, match="invalid_parameter"):
             protocol.validate_envelope({}, error=factory)
         assert protocol.validate_envelope(envelope(), error=factory)
+
+
+class TestEndpoint:
+    @pytest.mark.parametrize("origin", [
+        "http://127.0.0.1:8776", "http://localhost:8776",          # local middleware
+        "https://control.example.com", "https://control.example.com:8443",
+        "https://127.0.0.1:8443",                                  # loopback TLS (local testing)
+    ])
+    def test_accepts_loopback_http_and_any_https(self, origin):
+        assert endpoint(origin) == origin
+
+    def test_trailing_slashes_normalize_away(self):
+        assert endpoint("https://control.example.com/") == "https://control.example.com"
+
+    @pytest.mark.parametrize("origin", [
+        "http://control.example.com:8443",   # plaintext never leaves the loopback
+        "http://127.0.0.1",                  # local http keeps the explicit-port rule
+        "https://user:secret@control.example.com",
+        "https://control.example.com/runtime",
+        "https://control.example.com?token=x",
+        "https://control.example.com#frag",
+        "https://control.example.com:99999",
+        "ws://control.example.com",
+        "https://",
+    ])
+    def test_rejects_plaintext_remote_and_structured_suffixes(self, origin):
+        with pytest.raises(protocol.ControlError):
+            endpoint(origin)
 
 
 class TestProjectKey:

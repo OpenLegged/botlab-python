@@ -79,6 +79,43 @@ restart.
   isolation needs separate restricted workers. First hosted phase supports
   platform-maintained adapters only.
 
+## M1: remote control over HTTPS (implemented)
+
+M1 ships the remote transport without any account system, using **restricted
+developer credentials** (the middleware token, shared out of band):
+
+- **Endpoint rules** (`botlab.control.discovery.endpoint`): loopback HTTP
+  keeps the explicit-port rule; HTTPS is accepted for any host with an
+  optional port. Plaintext HTTP never leaves the loopback.
+- **Enrollment** (`botlab control enroll --endpoint https://…`): the CLI
+  probes `/info`, pins the reported `project_key`/`project` identity and the
+  `instance_id` into a `0600` discovery descriptor marked `remote: true`.
+  Every later command — including `wait`/`retry` — flows through the normal
+  descriptor, receipt and restart-refusal semantics with zero changes.
+  Identity comparison for remote descriptors uses the enrollment pin, not the
+  local checkout path (trust-on-first-use; M2 replaces this with accounts).
+  Re-enrolling the same endpoint replaces its previous descriptor; a second
+  endpoint reusing an instance identity fails with `instance_conflict`.
+- **Credentials**: the token reaches the CLI via `BOTLAB_CONTROL_TOKEN` or a
+  hidden prompt — never argv. For private CAs set `BOTLAB_CONTROL_CA_BUNDLE`
+  to the CA file; TLS verification is never disabled.
+- **Middleware exposure** (MicroDuck reference): `serve --host 0.0.0.0`
+  behind a TLS-terminating reverse proxy, `--public-host` to allowlist the
+  proxy's Host header, `--public-endpoint https://…` to record the public
+  origin in the descriptor, `--print-token` for the operator channel. The
+  browser panel connects to `wss://<public>/runtime` with the same token.
+
+Acceptance for M1 is encoded in `tests/test_control_remote.py`: enrollment,
+pinned-identity control, restart refusal until re-enrollment, identity-pin
+mismatch, self-signed rejection without the CA, and multi-instance selection —
+all over real TLS with a generated dev CA. Genuine cross-machine acceptance
+(two physical machines) remains a manual step: same commands, `--endpoint` on
+the other machine's origin.
+
+Explicitly **not** in M1: accounts and remote discovery (M2), instance pools
+and isolation (M3), web HIL (H1 — separate chain, never rides these
+semantics).
+
 ## HIL boundary (for H1)
 
 HIL inference rides its own chain and must not inherit Control-command
