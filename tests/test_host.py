@@ -125,3 +125,28 @@ def test_json_value_normalizes_integer_floats_and_rejects_nan():
     assert _host._json_value(1.0, "x") == 1
     assert isinstance(_host._json_value(1.0, "x"), int)
     assert _host._json_value({"b": 1, "a": [True, None]}, "x") == {"a": [True, None], "b": 1}
+
+
+def test_option_parameter_membership(session):
+    options = [{"label": "Walk", "value": 2}, {"label": "Jump", "value": 7}]
+    session.declare_project("Options", 50, 200, {"mode": {"default": 2, "options": options}})
+    session.set_parameter("mode", 7)
+    assert session.parameter("mode") == 7
+    for value in (3, 2.5, True):
+        with pytest.raises(BotLabError):
+            session.set_parameter("mode", value)
+
+
+@pytest.mark.parametrize("spec", [
+    {"default": 1, "options": []},
+    {"default": 1, "options": [{"label": "A", "value": 2}]},
+    {"default": 1, "options": [{"label": "", "value": 1}]},
+    {"default": 1, "options": [{"label": "A", "value": 1}] * 2},
+    {"default": 1.5, "options": [{"label": "A", "value": 1.5}]},
+    {"default": 1, "range": [0, 2], "options": [{"label": "A", "value": 1}]},
+    {"default": 1, "step": 1, "options": [{"label": "A", "value": 1}]},
+    {"default": 1, "options": [{"label": "A", "value": 1, "extra": True}]},
+])
+def test_invalid_option_parameters(session, spec):
+    with pytest.raises(BotLabError):
+        session.declare_project("Options", 50, 200, {"mode": spec})
