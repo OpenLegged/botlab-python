@@ -10,7 +10,7 @@
 用一句话向用户确认处于哪种情况，确认前只做只读检查：
 
 - **A. 本机试跑（无板卡）**：同一台电脑起网关 + agent，浏览器连 `ws://127.0.0.1:50060`。
-- **B. 真实 Linux 板卡（Python 3.10+，仅需出网）+ 有域名的服务器**：服务器跑网关 + TLS 反代，板卡跑 agent。
+- **B. 真实 Linux 板卡（Python 3.10+），网线/局域网连着用户本机且 SSH 可达**：网关 + agent 都跑在板卡回环，本机一条 `ssh -L` 隧道把网关投到本机回环，浏览器仍连 `ws://127.0.0.1:50060`。板卡装包需出网。异地无法 SSH 直达的板卡才需要域名服务器方案（见 `hil.md`「Gateway targets」）。
 
 ## 1. 组件检查（只读）
 
@@ -38,28 +38,35 @@ BOTLAB_HIL_TOKEN=<令牌> botlab-agent connect --gateway ws://127.0.0.1:50060 --
 
 两个进程保持前台运行。验证标准：agent 日志出现 `BotLab HIL agent: registered as <id> (onnxruntime)`，且 `lsof -iTCP:50060` 显示 ESTABLISHED。助手可代跑（会话后台任务），但必须告知用户进程随会话结束而停止，并附自行重启的两条终端命令。
 
-## 4. 场景 B 命令（板卡 + 域名服务器）
+## 4. 场景 B 命令（板卡直连本机 + SSH 隧道）
+
+两段 `ws://` 都不离开各自主机回环（浏览器拨本机回环、agent 拨板卡回环），跨网线
+流量由 SSH 加密，因此不需要域名、证书或 `wss://`。
 
 ```bash
-# 服务器（生成强令牌：python3 -c "import secrets; print(secrets.token_urlsafe(32))"）
+# 板卡（SSH 登录后执行；装包需出网——可临时把本机网络共享给网口，或让板卡连 Wi-Fi）
 python3 -m venv ~/botlab-venv
 BOTLAB_ALLOW_MISSING_UI=1 ~/botlab-venv/bin/pip install \
-  "botlab-python[gateway] @ git+https://github.com/OpenLegged/botlab-python.git@feat/control-protocol-core"
-BOTLAB_HIL_GATEWAY_TOKEN=<强令牌> ~/botlab-venv/bin/botlab-hil-gateway \
-  --host 127.0.0.1 --port 50060 --print-token        # 可改 read -s 输入避免进 shell 历史
-caddy reverse-proxy --from <域名> --to 127.0.0.1:50060   # 需 DNS 指向服务器、80/443 可入站
+  "botlab-python[gateway,target] @ git+https://github.com/OpenLegged/botlab-python.git@feat/control-protocol-core"
 
-# 板卡
-python3 -m venv ~/botlab-venv
-BOTLAB_ALLOW_MISSING_UI=1 ~/botlab-venv/bin/pip install \
-  "botlab-python[target] @ git+https://github.com/OpenLegged/botlab-python.git@feat/control-protocol-core"
+# 板卡终端 1：网关（只绑板卡回环；未设 BOTLAB_HIL_GATEWAY_TOKEN 时随机生成并由 --print-token 打印）
+~/botlab-venv/bin/botlab-hil-gateway --host 127.0.0.1 --port 50060 --print-token
+
+# 板卡终端 2：agent（网关就在板卡上，拨板卡回环）
 BOTLAB_HIL_TOKEN=<令牌> ~/botlab-venv/bin/botlab-agent connect \
-  --gateway wss://<域名> --device <设备ID>
+  --gateway ws://127.0.0.1:50060 --device <设备ID>
+
+# 本机终端 3：SSH 隧道（保持运行；断开后重跑同一条命令即可恢复）
+ssh -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 \
+  -L 50060:127.0.0.1:50060 <用户>@<板卡地址>
 ```
+
+验证标准：板卡终端 2 出现 `BotLab HIL agent: registered as <id> (onnxruntime)`；
+本机 `lsof -nP -iTCP:50060` 显示 ssh 监听 `127.0.0.1:50060`。
 
 ## 5. 安全规则
 
-令牌只在用户对话中转述，绝不写入文件、日志或提交；`ws://` 仅限本机回环，跨机器一律 `wss://`；强令牌一律 `secrets.token_urlsafe(32)`。
+令牌只在用户对话中转述，绝不写入文件、日志或提交；`ws://` 仅限各自主机回环（场景 A 的本机回环、场景 B 的板卡回环），场景 B 的跨机流量只走 SSH 隧道；确需异地 `wss://` 网关时，强令牌一律 `secrets.token_urlsafe(32)`。
 
 ## 6. 交付
 
@@ -72,5 +79,6 @@ BOTLAB_HIL_TOKEN=<令牌> ~/botlab-venv/bin/botlab-agent connect \
 - `src/botlab/ui is missing` → git 源缺 UI 快照，安装命令加前缀 `BOTLAB_ALLOW_MISSING_UI=1`；
 - 端口相关报错 → 先 `lsof -iTCP:<port>` 查占用再决定，不要直接换端口；
 - agent 能注册但推理报错 → 缺 `[target]` extras（numpy/onnxruntime），补装即可。
+- 浏览器连不上但板卡 agent 已注册 → 本机 `ssh -L` 隧道断了或本机 50060 被占，`lsof -nP -iTCP:50060` 查明后重跑隧道命令。
 
 架构与协议背景见 [hil.md](hil.md)。
