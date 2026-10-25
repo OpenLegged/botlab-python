@@ -240,3 +240,52 @@ def test_embedded_onnx_validation_checks_nested_attribute_tensors():
     external = message(7, message(1, message(5, message(5, b"\x6a\x00"))))
     with pytest.raises(HilError, match="External"):
         require_embedded_tensors(external)
+
+
+def test_serve_stream_survives_idle_read_timeouts(tmp_path):
+    """Coordinators compile for minutes before their first frame; idle reads
+    must keep the lease alive instead of terminating the dispatch loop."""
+    import json
+
+    from botlab.hil.agent import serve_stream
+
+    state = AgentState(tmp_path / "models", ArithmeticBackend())
+    sent = []
+
+    class IdleThenHelloStream:
+        stage = 0
+        frame = b""
+        offset = 0
+
+        def settimeout(self, value):
+            pass
+
+        def recv(self, size):
+            if self.stage == 0:
+                self.stage = 1
+                raise TimeoutError("idle read")
+            if self.stage == 1:
+                payload = json.dumps({"op": "hello", "version": 1}).encode()
+                self.frame = struct.pack(">I", len(payload)) + payload
+                self.stage = 2
+                self.offset = 0
+            chunk = self.frame[self.offset:self.offset + size]
+            if not chunk:
+                raise OSError("stream closed after hello")
+            self.offset += size
+            return chunk
+
+        def sendall(self, data):
+            sent.append(data)
+
+        def close(self):
+            pass
+
+    # The stream closes after hello; the transport error ends the loop (caller
+    # owns reconnection), but the idle timeouts before it must not have.
+    with pytest.raises(OSError, match="closed after hello"):
+        serve_stream(state, IdleThenHelloStream())
+    assert len(sent) == 1
+    reply = json.loads(sent[0][4:].decode())
+    assert reply["ok"] is True
+    assert reply["device"]["backend"] == "arithmetic"

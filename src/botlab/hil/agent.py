@@ -236,7 +236,13 @@ def serve_stream(state: AgentState, stream) -> None:
     """Run the dispatch loop over any socket-shaped stream (TCP or gateway)."""
     stream.settimeout(120)
     while True:
-        message = receive(stream)
+        try:
+            message = receive(stream)
+        except TimeoutError:
+            # Idle keep-alive: a coordinator may compile for minutes before its
+            # first frame. Transport pings own connection liveness, so a read
+            # timeout is not a lease failure — keep waiting for traffic.
+            continue
         try:
             result = state.dispatch(stream, message)
             send(stream, {"ok": True, **result})
