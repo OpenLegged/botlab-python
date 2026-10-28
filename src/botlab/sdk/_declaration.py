@@ -46,6 +46,33 @@ def _non_empty_string(value, label):
     return value
 
 
+# 展示文案支持的界面语言；与前端 src/domain/low-code/localizedText.ts 保持一致。
+_TEXT_LOCALES = ("en", "zh")
+
+
+def _localized_text(value, label):
+    """Display text: a non-empty string, or {"en": ..., "zh": ...} with "en" as fallback."""
+    if isinstance(value, str):
+        # 纯字符串沿用原有规则，已有工程的计划输出不变。
+        return _non_empty_string(value, label)
+    if not isinstance(value, dict):
+        raise TypeError(f'{label} must be a non-empty string or a {{"en": ..., "zh": ...}} mapping')
+    unknown = sorted(set(value) - set(_TEXT_LOCALES))
+    if unknown:
+        raise ValueError(f"{label} has unsupported locales {unknown} (expected {list(_TEXT_LOCALES)})")
+    if "en" not in value:
+        raise ValueError(f'{label} must include an "en" entry')
+    table = {}
+    for locale in _TEXT_LOCALES:
+        if locale not in value:
+            continue
+        text = value[locale]
+        if not isinstance(text, str) or not text.strip():
+            raise ValueError(f"{label}.{locale} must be a non-empty string")
+        table[locale] = text.strip()
+    return table
+
+
 def _plan_value(value, label):
     if isinstance(value, _ResourceValues):
         value = value._plan

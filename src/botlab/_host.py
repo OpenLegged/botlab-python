@@ -70,6 +70,32 @@ def _text(value: Any, label: str) -> str:
     return value
 
 
+# 展示文案支持的界面语言；与 BotLab 前端 localizedText.ts、SDK _declaration.py 保持一致。
+_TEXT_LOCALES = ("en", "zh")
+
+
+def _localized_text(value: Any, label: str) -> str | dict:
+    """Display text: a non-empty string, or {"en": ..., "zh": ...} with "en" as fallback."""
+    if isinstance(value, str):
+        return _text(value, label)
+    if not isinstance(value, dict):
+        raise BotLabError(f'[botlab] {label} must be a non-empty string or a {{"en": ..., "zh": ...}} mapping')
+    unknown = sorted(set(value) - set(_TEXT_LOCALES))
+    if unknown:
+        raise BotLabError(f"[botlab] {label} has unsupported locales {unknown} (expected {list(_TEXT_LOCALES)})")
+    if "en" not in value:
+        raise BotLabError(f'[botlab] {label} must include an "en" entry')
+    table = {}
+    for locale in _TEXT_LOCALES:
+        if locale not in value:
+            continue
+        text = value[locale]
+        if not isinstance(text, str) or not text.strip():
+            raise BotLabError(f"[botlab] {label}.{locale} must be a non-empty string")
+        table[locale] = text.strip()
+    return table
+
+
 def _json_value(value: Any, label: str, _stack: frozenset[int] = frozenset()) -> Any:
     """Normalize a Python declaration value to its JS counterpart.
 
@@ -144,7 +170,7 @@ def _declared_parameter(pid: str, value: Any) -> dict:
         for option in value["options"]:
             if not isinstance(option, dict) or set(option) != {"label", "value"}:
                 raise BotLabError(f"[botlab] Parameter {pid!r} option requires only label and value")
-            label = _text(option["label"], f"Parameter {pid!r} option label")
+            label = _localized_text(option["label"], f"Parameter {pid!r} option label")
             number = _finite_number(option["value"], f"Parameter {pid!r} option value")
             if number != int(number) or abs(number) > 9007199254740991:
                 raise BotLabError(f"[botlab] Parameter {pid!r} option value must be a safe integer")
@@ -179,7 +205,7 @@ def _declared_parameter(pid: str, value: Any) -> dict:
     if step is not None:
         result["step"] = step
     if "label" in value:
-        result["label"] = _text(value["label"], f"Parameter {pid!r} label")
+        result["label"] = _localized_text(value["label"], f"Parameter {pid!r} label")
     if "unit" in value:
         result["unit"] = _text(value["unit"], f"Parameter {pid!r} unit")
     return result

@@ -150,3 +150,24 @@ def test_option_parameter_membership(session):
 def test_invalid_option_parameters(session, spec):
     with pytest.raises(BotLabError):
         session.declare_project("Options", 50, 200, {"mode": spec})
+
+
+def test_localized_parameter_labels():
+    spec = _host._declared_parameter("mode", {
+        "label": {"en": " Mode ", "zh": "模式"},
+        "default": 2,
+        "options": [{"label": {"en": "Walk", "zh": "行走"}, "value": 2}],
+    })
+    assert spec["label"] == {"en": "Mode", "zh": "模式"}
+    assert spec["options"] == [{"label": {"en": "Walk", "zh": "行走"}, "value": 2}]
+
+
+@pytest.mark.parametrize(("label", "message"), [
+    ({"zh": "速度"}, 'must include an "en" entry'),
+    ({"en": "Speed", "fr": "Vitesse"}, "unsupported locales"),
+    ({"en": "Speed", "zh": " "}, "zh must be a non-empty string"),
+    (["Speed"], "must be a non-empty string or a"),
+])
+def test_invalid_localized_parameter_labels(label, message):
+    with pytest.raises(BotLabError, match=message):
+        _host._declared_parameter("speed", {"default": 0, "label": label})
