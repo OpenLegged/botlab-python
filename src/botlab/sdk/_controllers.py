@@ -40,6 +40,8 @@ class PolicyController(Controller):
         kp=None,
         kd=None,
         effort_limit=None,
+        reset_on_change=None,
+        end_after_steps=None,
     ):
         if not isinstance(robot, Robot):
             raise TypeError("PolicyController robot must be a BotLab Robot")
@@ -61,6 +63,12 @@ class PolicyController(Controller):
             )
         else:
             target = _as_signal(target, "PolicyController target")
+            dynamic_gains = {}
+            gain_inputs = []
+            for name, value in (("kps", kp), ("kds", kd)):
+                if isinstance(value, Signal):
+                    dynamic_gains[f"{name}InputSlot"] = 3 + len(gain_inputs)
+                    gain_inputs.append(value)
             explicit_pd_values = (kp, kd, effort_limit)
             dimension = (
                 robot.action_dimension()
@@ -74,12 +82,12 @@ class PolicyController(Controller):
                     "pdType": "position",
                     "kps": (
                         robot.kp
-                        if kp is None
+                        if kp is None or isinstance(kp, Signal)
                         else _policy_pd_vector(kp, dimension, "PolicyController kp")
                     ),
                     "kds": (
                         robot.kd
-                        if kd is None
+                        if kd is None or isinstance(kd, Signal)
                         else _policy_pd_vector(kd, dimension, "PolicyController kd")
                     ),
                     "effortLimit": (
@@ -95,15 +103,48 @@ class PolicyController(Controller):
                         robot.id,
                         "actuatorJointOrder",
                     ),
+                    **dynamic_gains,
                 },
                 (
                     target,
                     robot.joint_position(order="native", _label="pd-joint-position"),
                     robot.joint_velocity(order="native", _label="pd-joint-velocity"),
+                    *gain_inputs,
                 ),
             )
             sink = Signal("out-mujoco", "controller", {}, (pd,))
             self._plan_data, self.modify_action = _control_plan(robot.id, sink, pd)
+
+        if reset_on_change is not None:
+            from ._resources import Motion
+            if self.modify_action is not None:
+                raise ValueError("reset_on_change cannot be combined with an action modifier")
+            if not isinstance(reset_on_change, dict) or set(reset_on_change) != {"parameter", "motions"}:
+                raise ValueError("reset_on_change requires parameter and motions")
+            parameter = reset_on_change["parameter"]
+            choices = reset_on_change["motions"]
+            if not isinstance(parameter, str) or not parameter.strip():
+                raise ValueError("reset_on_change parameter must be non-empty")
+            if not isinstance(choices, dict) or not choices:
+                raise ValueError("reset_on_change motions must map option values to Motion resources")
+            mappings = []
+            for value, motion in choices.items():
+                if isinstance(value, bool) or not isinstance(value, int) or abs(value) > 9007199254740991:
+                    raise ValueError("reset_on_change values must be safe integers")
+                if not isinstance(motion, Motion):
+                    raise TypeError("reset_on_change choices must be Motion resources")
+                mappings.append({"value": value, "motionId": motion.id})
+            hook = next(node for node in self._plan_data["nodes"] if node["type"] == "proc-action-hook")
+            hook["data"]["resetOnChange"] = {
+                "parameter": parameter, "motions": mappings, "robotId": robot.id,
+            }
+
+        if end_after_steps is not None:
+            from ._run_end import encode_end_after_steps
+            if self.modify_action is not None:
+                raise ValueError("end_after_steps cannot be combined with an action modifier")
+            hook = next(node for node in self._plan_data["nodes"] if node["type"] == "proc-action-hook")
+            hook["data"]["endAfterSteps"] = encode_end_after_steps(end_after_steps)
 
     @property
     def plan(self):

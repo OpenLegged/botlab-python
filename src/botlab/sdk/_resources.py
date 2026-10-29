@@ -141,7 +141,7 @@ class Motion:
     def source(self):
         return str(botlab_host.resourceSource(self.id))
 
-    def sample(self, time, *, channel, indices, interpolation="linear", loop=False):
+    def sample(self, time, *, channel, indices, interpolation="linear", loop=False, preview=False):
         """Sample absolute motion channels at a Signal time in seconds.
 
         Selections preserve explicit order; names require motion metadata. Linear
@@ -154,12 +154,15 @@ class Motion:
             raise ValueError('motion interpolation must be "linear" or "nearest"')
         if not isinstance(loop, bool):
             raise TypeError("motion sample loop must be a boolean")
+        if not isinstance(preview, bool):
+            raise TypeError("motion sample preview must be a boolean")
         if not isinstance(indices, _ResourceValues):
             if isinstance(indices, (str, int)):
                 raise TypeError("motion indices must be a sequence of names or indices")
             indices = _entity_targets(indices)
         data = _motion_source_data(self)
-        data.update({"channel": channel, "indices": indices, "interpolation": interpolation, "loop": loop})
+        data.update({"channel": channel, "indices": indices, "interpolation": interpolation,
+                     "loop": loop, "preview": preview})
         return Signal("proc-motion-sample", f"motion-{channel}", data, (_numeric_signal(time),))
 
     async def load(self):
@@ -192,6 +195,14 @@ class _DepthFrame:
 
 
 class Sensor:
+    """Camera resource calibrated by preset/config.
+
+    ``fov`` is the full sensor's vertical field of view in degrees. Optional
+    ``horizontalFov`` (0 < value < 180) independently sets its horizontal view;
+    omitted/None preserves the aspect-derived view. Cropping does not change
+    either calibration. Both browser and native runtimes use these fields.
+    """
+
     def __init__(self, source, *, preset=None, config=None, name=None):
         self.id = _declare_resource(
             "sensor",
