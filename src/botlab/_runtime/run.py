@@ -391,10 +391,7 @@ def main(argv=None):
                 str(error) for error in cleanup_errors
             )
             if primary_error is not None:
-                if hasattr(primary_error, "add_note"):
-                    primary_error.add_note(message)
-                else:  # Python 3.9/3.10: preserve the primary traceback.
-                    print(message, file=sys.stderr)
+                primary_error.add_note(message)
             elif len(cleanup_errors) == 1:
                 raise cleanup_errors[0]
             else:

@@ -3,9 +3,12 @@ import base64
 import copy
 import json
 import math
+import shutil
+import tempfile
 import threading
 import time
 import uuid
+from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
@@ -40,16 +43,22 @@ def completed(api, response):
 @pytest.fixture
 def management(project_dir, tmp_path, monkeypatch):
     pytest.importorskip("onnxruntime")
-    monkeypatch.setenv("BOTLAB_TARGETS_FILE", str(tmp_path / "targets.json"))
+    # Server state (targets file, agent cache, UI dir) lives OUTSIDE the
+    # project directory, matching the `botlab run` production layout — the
+    # recursive project walk must never pick it up as project files.
+    # .resolve(): mkdtemp lands under /var → /private/var on macOS, and the
+    # HIL path checks reject symlinked parents.
+    state_root = Path(tempfile.mkdtemp(prefix="botlab-hil-test-")).resolve()
+    monkeypatch.setenv("BOTLAB_TARGETS_FILE", str(state_root / "targets.json"))
     worker = WorkerBackend("onnxruntime")
-    state = AgentState(tmp_path / "cache", worker, root=tmp_path / "target")
+    state = AgentState(state_root / "cache", worker, root=state_root / "target")
     agent = AgentServer(("127.0.0.1", 0), state)
     agent_thread = threading.Thread(target=agent.serve_forever, daemon=True)
     agent_thread.start()
     target = save_target({"id": "cpu", "name": "Generic CPU", "backend": "onnxruntime",
                           "endpoint": f"tcp://127.0.0.1:{agent.server_address[1]}"})
     host = HilHost(project_dir, target["id"])
-    ui = tmp_path / "ui"
+    ui = state_root / "ui"
     ui.mkdir()
     (ui / "index.html").write_text("<html><head></head><body>test</body></html>")
     httpd, base = start_project_server(project_dir, None, "127.0.0.1", 0, ui_dir=ui,
@@ -77,6 +86,7 @@ def management(project_dir, tmp_path, monkeypatch):
         agent.server_close()
         agent_thread.join()
         worker.reset()
+        shutil.rmtree(state_root, ignore_errors=True)
 
 
 def test_full_build_deploy_load_run_stop_unload_management(management):

@@ -10,12 +10,14 @@ The browser execution protocol is separate and is not changed by this API.
 ```sh
 botlab control --project . instances --json
 botlab control --project . capabilities --json
+botlab control --project . experience --json
 botlab control --project . sessions --json
 botlab control --project . state --json
 botlab control --project . call joint.position --args '{"positions":[0.1,-0.1]}' --request-id my-request --json
 botlab control --project . wait --id my-request --timeout 1 --json
 botlab control --project . retry --id my-request --json
 botlab control --project . stop --request-id my-stop --json
+botlab control serve --port 8776 --origin https://your-botlab-page.example
 ```
 
 `call` accepts an object via `--args` or `--args-file`. `move --vx V --vy V
@@ -31,7 +33,8 @@ Options `--project`, `--endpoint`, `--instance`, `--session` and `--json` may ap
 before or after the subcommand. The project defaults to the current working directory.
 Multiple live instances require explicit selection. `connection` reports the selected
 address and pairing guidance; only explicit `--show-token` exposes the pairing token.
-The CLI does not start a project middleware or manipulate a browser window.
+`serve` starts the generic middleware below; apart from it the CLI does not start a
+project middleware or manipulate a browser window.
 
 JSON stdout contains one object, including on argument errors. Exit codes are 0 for
 success or pending, 2 for parsing/connection/request errors, and 3 for a cancelled,
@@ -81,8 +84,9 @@ New optional fields are compatible; unknown API major versions are rejected.
 
 | Method / path | Meaning |
 | --- | --- |
-| GET `/info` | `api_version:1`, `protocol:'botlab-control'`, project, project_key, instance_id, backend `{id,kind}` |
+| GET `/info` | `api_version:1`, `protocol:'botlab-control'`, project, project_key, instance_id, backend `{id,kind}`, `extensions` |
 | GET `/capabilities` | api_version, instance_id, capabilities_revision, capabilities array |
+| GET `/experience` | instance_id, capabilities_revision and the project's text experience document |
 | GET `/sessions` | instance_id and available sessions/targets; no FSM requirement |
 | GET `/state` | instance_id, project_key and current state |
 | POST `/commands` | submit the complete command envelope |
@@ -176,11 +180,75 @@ necessarily an emergency freeze or interruption of a running dynamic action. Loc
 middleware/backend deadlines and leases, not model or CLI response timing, enforce
 bounded execution. Pause/reset/disconnection never implicitly replay old commands.
 
+## Generic middleware: `botlab control serve`
+
+`pip install "botlab-python[serve]"` adds the generic middleware. The client CLI stays
+standard-library-only: `serve` imports its server module lazily, and without the extra
+reports `missing_dependency` (exit 2) instead of crashing.
+
+```sh
+botlab control serve --port 8776 --origin http://127.0.0.1:5199
+```
+
+`--origin` (repeatable) allowlists the BotLab page origin for browser pairing and is
+required. Discovery registration, permissions (0700/0600), the pairing token
+(`--print-token` or the descriptor) and remote enrollment (`--public-endpoint`, HTTPS
+only) follow the rules above unchanged. `/info` declares `extensions:
+["project-descriptor"]`; clients ignore extensions they do not know.
+
+The middleware itself is project-agnostic: the paired page uploads the project's
+control semantics at connect time, and the middleware compiles them into capabilities.
+Until then `/capabilities`, `/experience`, `/commands` and `/stop` answer
+`no_project_paired` (HTTP 409), while `/info` and `/state` keep working.
+
+Pairing sequence over the `/runtime` WebSocket (the v1 message envelope is unchanged):
+
+```
+hello {token}                              page → middleware
+welcome {profile: null, descriptor:{version:1}}   middleware → page (negotiation bit)
+descriptor {profile, motion, actions, states?, experience?}   page → middleware
+descriptor_ack {capabilities_revision, profile}   middleware → page
+... then state / command / renew / result exactly as before
+```
+
+A middleware without the `descriptor` negotiation bit never receives a descriptor
+frame, so old pages and old middlewares interop unchanged. On reconnect the retained
+descriptor is echoed in `welcome.profile` and re-uploads are idempotent (same revision);
+a second descriptor on one connection closes it with `invalid_message`. Structural
+validation failures close with `invalid_descriptor` (or `descriptor_too_large` for an
+experience document over 32768 bytes); state frames before a descriptor are
+`invalid_message`. The middleware performs structural validation only — cross-checks
+against the actual project (the robot exists, the state node and parameters are
+consumed, state codes cover the FSM) stay on the page, which owns the project manifest.
+
+Descriptor fields (frame ≤ 64 KiB): `profile` with `robot_id`, `state_node_id`,
+`motion_parameters` mapping exactly `vx` and `yaw_rate` to signal names,
+`event_parameter` and nonzero unique `event_values`; `motion` with `vx`/`yaw_rate`
+`{min<max, unit}` and `allowed_states`; `actions` as an array of
+`{name, event_value, allowed_states, target_states, capability?, idempotent?}` —
+names match `^[a-z][a-z0-9_]{0,63}$`, capability ids are dotted-lowercase with
+`motion.twist`/`control.stop` reserved, and two actions may share an event value (a
+toggle distinguished by `allowed_states`); optional `states` mapping canonical decimal
+codes to names; optional `experience` text. Target states are declared, not derived
+from FSM transitions: steady-state targets are reached via after-step chains.
+
+The compiled surface fixes `motion.twist` (descriptor bounds, `vy` constant 0,
+`duration_s` 0.05..10) and `control.stop`; each action becomes a capability
+(`action.<name>` unless overridden) carrying
+`preconditions {allowed_state_codes, target_state_codes}`. The middleware self-checks
+the compiled table against the frozen capability contract.
+`capabilities_revision` is `"gen-" + sha256(canonical descriptor)[:16]`, so any
+descriptor change forces clients to re-read capabilities.
+
 ## Initial integration boundary
 
-MicroDuck is the first adapter. Its middleware retains the existing browser WebSocket
-v1, old HTTP routes and `python -m microduck_cli` entry point. New and old clients share
-one task registry. Installing the SDK alone does not upgrade a running middleware;
-deploy the compatibility service first, then install the CLI and verify actual feedback.
+MicroDuck is the first adapter; `botlab control serve` is the generic path for browser
+projects, with the paired page supplying the project's semantics. Project-authored
+adapter modules remain the escape hatch for headless/native execution, where no page
+exists to upload a descriptor. MicroDuck's middleware retains the existing browser
+WebSocket v1, old HTTP routes and `python -m microduck_cli` entry point. New and old
+clients share one task registry. Installing the SDK alone does not upgrade a running
+middleware; deploy the compatibility service first, then install the CLI and verify
+actual feedback.
 The joint-only HTTP fixture in `tests/test_control_cli.py` demonstrates protocol
 independence; it is not a hardware driver or a validated physical robot backend.

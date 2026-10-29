@@ -86,6 +86,8 @@ for first connection, CLI commands, deployment layout and current limits.
 my-robot-project/
 ├── main.py                 # Fixed four-line entry point
 ├── controller.py           # Project declarations and control expressions
+├── config/                 # Optional: declaration data split into yaml files
+│   └── runtime.yaml        #   referenced canonically via read_config("config/runtime.yaml")
 ├── robot.preset.yaml       # Joint order, PD gains, initial state, and calibration
 └── assets/                 # Project-relative MJCF, ONNX, meshes, and other assets
 ```
@@ -126,6 +128,24 @@ def create_controller(sim):
 See the BotLab repository's `docs/api/` directory for the complete API
 contract, including signal expressions, `policy_bank`, state machines, and
 resource preset fields.
+
+Declaration data (runtime settings, parameters, IO bindings, sensor configs,
+control profiles) may live in `config/*.yaml` files referenced from
+`controller.py` through `read_config("config/<name>.yaml")` — the file is the
+declaration data, the source is structure and wiring. The CLI collects them
+recursively into the release `files` (same path rules as the browser editor,
+so `botlab build` and a browser publish produce identical project digests):
+
+```python
+from botlab import Model, PolicyController, Robot, concat, project, read_config
+
+runtime = read_config("config/runtime.yaml")
+project(
+    runtime["name"],
+    control_hz=runtime["control_hz"],
+    physics_hz=runtime["physics_hz"],
+)
+```
 
 ## Commands
 

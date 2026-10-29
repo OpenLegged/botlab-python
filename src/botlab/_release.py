@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import json
 import zipfile
+from datetime import UTC
 from pathlib import Path
 
 from ._host import MOTION_REQUIRED_FILES, BotLabError
@@ -281,9 +282,9 @@ def create_release_package(
 
 
 def _release_timestamp() -> str:
-    from datetime import datetime, timezone
+    from datetime import datetime
 
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _optional_onnx_module():

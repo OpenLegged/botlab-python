@@ -34,8 +34,25 @@ def build_parser() -> argparse.ArgumentParser:
     parser = _Parser(prog="botlab control", description="Use any project middleware implementing Control API v1.")
     _common(parser)
     subparsers = parser.add_subparsers(dest="command", required=True)
-    for name in ("instances", "capabilities", "sessions", "state", "connection", "enroll", "call", "move", "action", "wait", "retry", "stop"):
+    for name in ("instances", "capabilities", "experience", "sessions", "state", "connection",
+                 "enroll", "call", "move", "action", "wait", "retry", "stop", "serve"):
         sub = subparsers.add_parser(name)
+        if name == "serve":
+            # The generic middleware runs in this process; discovery flags do
+            # not apply and the page origin must be allowlisted explicitly.
+            sub.add_argument("--project", default=".", help="project directory anchoring discovery (default: cwd)")
+            sub.add_argument("--json", action="store_true", default=False, help=argparse.SUPPRESS)
+            sub.add_argument("--port", type=int, default=8776, help="loopback HTTP port (1024..65535)")
+            sub.add_argument("--host", default="127.0.0.1", help="bind address")
+            sub.add_argument("--origin", action="append", required=True,
+                             help="allowlisted BotLab page origin for browser pairing (repeatable)")
+            sub.add_argument("--public-host", action="append",
+                             help="additional Host header accepted behind a proxy (repeatable)")
+            sub.add_argument("--public-endpoint",
+                             help="public HTTPS origin when serving behind TLS (enables remote enrollment)")
+            sub.add_argument("--print-token", action="store_true",
+                             help="print the pairing token to stderr for out-of-band sharing")
+            continue
         _common(sub, subcommand=True)
         if name in {"call", "move", "action", "stop"}:
             sub.add_argument("--request-id", help="stable ID for explicit retries")
@@ -60,8 +77,22 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def run(args: argparse.Namespace) -> dict:
+    if args.command == "serve":
+        # Dispatch before any client construction: the middleware IS this
+        # process. serve_service imports aiohttp, which must stay out of the
+        # stdlib-only client import chain (mirrors botlab.hil.gateway).
+        try:
+            from .serve_service import ControlError as ServeError
+            from .serve_service import serve as serve_middleware
+        except ImportError as error:
+            raise ControlError("missing_dependency",
+                               "botlab control serve needs the serve extra: pip install 'botlab-python[serve]'") from error
+        try:
+            return serve_middleware(args)
+        except ServeError as error:
+            raise ControlError(error.code, str(error)) from error
     client = ControlClient(args.project, endpoint=args.endpoint, instance=args.instance, session=args.session)
-    if args.command in {"instances", "capabilities", "sessions", "state"}:
+    if args.command in {"instances", "capabilities", "experience", "sessions", "state"}:
         return getattr(client, args.command)()
     if args.command == "connection":
         return client.connection(args.show_token)

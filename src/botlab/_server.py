@@ -30,7 +30,8 @@ import webbrowser
 from collections.abc import Callable
 from pathlib import Path
 
-from ._host import PRESET_FILE_SUFFIX, BotLabError
+from ._host import BotLabError
+from ._project import is_project_text_file, walk_project_files
 from .hil.protocol import error_details
 
 CROSS_ORIGIN_ISOLATION_HEADERS = {
@@ -75,35 +76,25 @@ def local_project_payload(project_dir: Path) -> dict:
     reload, mirroring the release provider's rebuild-on-change contract.
     Files map 1:1 onto ``/project/`` URLs: the editor's asset inventory uses
     base ``project``, so every path must be relative to the project root.
-    Source classification mirrors the two-file contract the editor and the
-    release packer share: flat ``*.py`` and ``*.preset.yaml`` at the project
-    root are sources; every other file (MJCF, ONNX, meshes, nested .py) is a
-    binary asset the tree shows at its real relative path.
+    Source classification mirrors the editor's project file tree and the
+    release packer: whatever ``is_project_text_file`` accepts (main.py /
+    controller.py, presets, nested Python packages, ``config/*.yaml``) is a
+    text source; every other file (MJCF, ONNX, meshes) is a binary asset the
+    tree shows at its real relative path. Local build noise (dot files,
+    ``release.zip``, caches, symlinks) stays out of the payload entirely.
     """
     files = {}
     assets = []
-    for child in sorted(project_dir.iterdir()):
-        if child.name.startswith(".") or child.name in ("release.zip", ".botlab.zip"):
-            continue
-        if child.is_dir():
-            if child.is_symlink() or child.name in ("__pycache__", "node_modules", "tmp") or child.name.startswith("."):
-                continue
-            for item in sorted(child.rglob("*")):
-                relative = item.relative_to(project_dir)
-                if (item.is_file() and not item.is_symlink()
-                        and not any(part.startswith(".") or part in ("__pycache__", "node_modules") for part in relative.parts)):
-                    assets.append(relative.as_posix())
-            continue
-        relative = child.relative_to(project_dir).as_posix()
-        if child.suffix == ".py" or child.name.endswith(PRESET_FILE_SUFFIX):
+    for posix, entry in walk_project_files(project_dir):
+        if posix != "botlab.yaml" and is_project_text_file(posix):
             try:
-                files[relative] = child.read_text(encoding="utf-8")
+                files[posix] = entry.read_text(encoding="utf-8")
             except UnicodeDecodeError as error:
                 raise BotLabError(
-                    f'Project file "{relative}" is not UTF-8 text: {error}'
+                    f'Project file "{posix}" is not UTF-8 text: {error}'
                 ) from error
         else:
-            assets.append(relative)
+            assets.append(posix)
     return {
         "format": "botlab-local-project",
         "version": 1,

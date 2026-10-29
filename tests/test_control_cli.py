@@ -39,6 +39,7 @@ class JointMiddleware:
         self.evicted = set()
         self.redirect = False
         self.descriptor = None
+        self.experience_text = "# Joint middleware experience"
         self.capability = {"id": "joint.position", "version": 1, "aliases": ["home"],
                            "input_schema": {"type": "object", "required": ["positions"],
                                             "additionalProperties": False,
@@ -85,6 +86,8 @@ class JointMiddleware:
                     response["sessions"] = [{"session_id": owner.session, "episode_id": owner.episode}]
                 elif parsed.path.endswith("/state"):
                     response.update(project_key=owner.key, state=owner.state())
+                elif parsed.path.endswith("/experience"):
+                    response.update(experience=owner.experience_text)
                 elif "/commands/" in parsed.path:
                     command_id = unquote(parsed.path.rsplit("/", 1)[1])
                     if parse_qs(parsed.query).get("instance_id") != [owner.instance]:
@@ -405,6 +408,19 @@ def test_connection_token_requires_explicit_flag(middleware):
     assert invoke("connection", "--show-token")[1]["token"] == "test-token"
 
 
+def test_experience_reads_the_project_document(middleware):
+    assert invoke("experience")[1]["experience"] == "# Joint middleware experience"
+    middleware.experience_text = None
+    assert invoke("experience")[1]["error"]["code"] == "invalid_protocol"
+
+
+def test_serve_argument_validation_is_single_json():
+    code, result = invoke("serve", "--port", "80", "--origin", "http://127.0.0.1:5199")
+    assert code == 2 and result["error"]["code"] == "invalid_port"
+    code, result = invoke("serve")
+    assert code == 2 and result["error"]["code"] == "invalid_arguments"
+
+
 @pytest.mark.parametrize("origin", ["http://example.com:80", "http://10.0.0.5:8776", "http://127.0.0.1:80/path",
                                     "http://user:secret@127.0.0.1:80", "http://127.0.0.1:80?token=x",
                                     "http://127.0.0.1:80#x", "https://user:secret@example.com",
@@ -468,18 +484,30 @@ def test_descriptor_replacement_refuses_retry(middleware):
 
 def test_cli_dispatch_and_base_install_without_optional_packages(tmp_path):
     source = Path(transport.__file__).parents[2]
-    script = '''
-import importlib.abc
-import sys
-class BlockOptional(importlib.abc.MetaPathFinder):
-    def find_spec(self, fullname, path=None, target=None):
-        if fullname.split(".")[0] in {"aiohttp", "numpy", "mujoco", "onnxruntime", "microduck_cli", "microduck_control"}:
-            raise ImportError("optional package forbidden: " + fullname)
-sys.meta_path.insert(0, BlockOptional())
-from botlab._cli import main
-raise SystemExit(main(["control", "instances", "--json"]))
-'''
-    process = subprocess.run([sys.executable, "-c", script], cwd=tmp_path,
-                             env={**os.environ, "PYTHONPATH": str(source)}, text=True, capture_output=True)
+
+    def blocked_cli(arguments):
+        script = (
+            "import importlib.abc\n"
+            "import sys\n"
+            "class BlockOptional(importlib.abc.MetaPathFinder):\n"
+            "    def find_spec(self, fullname, path=None, target=None):\n"
+            "        if fullname.split('.')[0] in {'aiohttp', 'numpy', 'mujoco', 'onnxruntime',"
+            " 'microduck_cli', 'microduck_control'}:\n"
+            "            raise ImportError('optional package forbidden: ' + fullname)\n"
+            "sys.meta_path.insert(0, BlockOptional())\n"
+            "from botlab._cli import main\n"
+            f"raise SystemExit(main({arguments!r} + ['--json']))\n"
+        )
+        return subprocess.run([sys.executable, "-c", script], cwd=tmp_path,
+                              env={**os.environ, "PYTHONPATH": str(source)}, text=True, capture_output=True)
+
+    process = blocked_cli(["control", "instances"])
     assert process.returncode == 0, process.stderr
     assert json.loads(process.stdout)["instances"] == []
+    # The serve parser face itself stays importable without aiohttp...
+    help_process = blocked_cli(["control", "serve", "--help"])
+    assert help_process.returncode == 0 and "--origin" in help_process.stdout, help_process.stderr
+    # ...while actually serving reports the missing extra instead of crashing.
+    serve_process = blocked_cli(["control", "serve", "--origin", "http://127.0.0.1:5199"])
+    assert serve_process.returncode == 2, serve_process.stderr
+    assert json.loads(serve_process.stdout)["error"]["code"] == "missing_dependency"

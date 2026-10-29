@@ -125,3 +125,90 @@ def test_json_value_normalizes_integer_floats_and_rejects_nan():
     assert _host._json_value(1.0, "x") == 1
     assert isinstance(_host._json_value(1.0, "x"), int)
     assert _host._json_value({"b": 1, "a": [True, None]}, "x") == {"a": [True, None], "b": 1}
+
+
+def test_read_project_file_needs_a_directory(session):
+    with pytest.raises(BotLabError, match="needs a project directory"):
+        _host.read_project_file("config/runtime.yaml")
+
+
+def test_read_config_feeds_every_declaration_chain(project_dir):
+    """The four config-driven chains end to end: project(), Sensor,
+    commands(parameters=...) and control_profile(...) all read their
+    declaration data from config/*.yaml through the vendored SDK."""
+    from botlab._project import load_project
+
+    config = project_dir / "config"
+    config.mkdir()
+    (config / "runtime.yaml").write_text(
+        "name: Config Demo\ncontrol_hz: 50\nphysics_hz: 200\n", encoding="utf-8"
+    )
+    (config / "parameters.yaml").write_text(
+        "forward_velocity: {default: 0.0, range: [-0.5, 0.5]}\n"
+        "yaw_rate: {default: 0.0, range: [-1, 1]}\n"
+        "policy_command: {default: 0, range: [0, 4]}\n",
+        encoding="utf-8",
+    )
+    (config / "observation.yaml").write_text(
+        "depth_camera:\n"
+        "  source: assets/robot/scene.xml\n"
+        "  config: {outputMode: depth}\n"
+        "  name: DepthCamera\n",
+        encoding="utf-8",
+    )
+    (config / "io.yaml").write_text(
+        "mode_command:\n"
+        "  parameters: [forward_velocity, yaw_rate]\n"
+        "  input_mode: keyboard\n",
+        encoding="utf-8",
+    )
+    (config / "control.yaml").write_text(
+        "state_node: state-machine\n"
+        "vx: forward_velocity\n"
+        "yaw_rate: yaw_rate\n"
+        "event: policy_command\n"
+        "motion_states: [0]\n"
+        'states: {"0": WALK}\n'
+        "actions:\n"
+        "  - {name: sit, event_value: 1, allowed_states: [0], target_states: [3]}\n",
+        encoding="utf-8",
+    )
+    (project_dir / "controller.py").write_text(
+        "from botlab import (PolicyController, Robot, Sensor, control_profile,\n"
+        "                    declare_control, project, read_config)\n"
+        "\n"
+        'runtime = read_config("config/runtime.yaml")\n'
+        "project(**runtime, parameters=read_config(\"config/parameters.yaml\"))\n"
+        'robot = Robot("assets/robot/scene.xml", preset="robot.preset.yaml")\n'
+        'Sensor(**read_config("config/observation.yaml")["depth_camera"])\n'
+        "declare_control(control_profile(robot, **read_config(\"config/control.yaml\")))\n"
+        "\n"
+        "\n"
+        "def create_controller(sim):\n"
+        '    command = robot.commands(**read_config("config/io.yaml")["mode_command"])\n'
+        "    return PolicyController(robot, control=command.action())\n",
+        encoding="utf-8",
+    )
+
+    loaded = load_project(project_dir)
+    manifest = loaded.manifest
+    assert manifest["project"]["name"] == "Config Demo"
+    assert manifest["runtime"]["controlHz"] == 50
+    sensor = next(r for r in manifest["resources"] if r["kind"] == "sensor")
+    assert sensor["id"] == "DepthCamera"
+    assert sensor["config"] == {"outputMode": "depth"}
+    command = next(n for n in loaded.compiled_plan["nodes"] if n["type"] == "obs-commands")["data"]
+    assert command["parameterNames"] == ["forward_velocity", "yaw_rate"]
+    assert command["cmdMin"] == [-0.5, -1]
+    assert command["cmdMax"] == [0.5, 1]
+
+    # load_project closes its session on the way out; the path sandbox holds
+    # inside a live declaration window.
+    session = _host.begin_project_declaration(lambda preset_id: None, project_dir)
+    assert _host.read_project_file("config/runtime.yaml").startswith("name: Config Demo")
+    with pytest.raises(BotLabError, match="inside the project directory"):
+        _host.read_project_file("../escape.yaml")
+    with pytest.raises(BotLabError, match="was not found"):
+        _host.read_project_file("config/missing.yaml")
+    session.finish_declaration()
+    _host.end_project_declaration()

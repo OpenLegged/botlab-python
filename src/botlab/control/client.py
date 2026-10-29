@@ -194,6 +194,13 @@ class ControlClient:
         validate_capabilities(payload)
         return payload
 
+    def experience(self) -> dict:
+        """Project control experience the paired page uploaded at connect time."""
+        payload = self._read("/experience")
+        if not isinstance(payload.get("experience"), str):
+            raise ControlError("invalid_protocol", "Middleware did not return a text experience document.")
+        return payload
+
     def state(self) -> dict:
         payload = self._read("/state")
         state = payload.get("state")

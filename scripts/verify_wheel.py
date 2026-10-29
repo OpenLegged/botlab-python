@@ -76,7 +76,11 @@ assert not direct.get("dir_info", {}).get("editable"), direct
 assert direct["url"] == Path(sys.argv[1]).as_uri(), direct
 assert "archive_info" in direct, direct
 scripts = {item.name: item.value for item in dist.entry_points if item.group == "console_scripts"}
-assert scripts == {"botlab": "botlab._cli:main"}, scripts
+assert scripts == {
+    "botlab": "botlab._cli:main",
+    "botlab-agent": "botlab.hil.agent:main",
+    "botlab-hil-gateway": "botlab.hil.gateway:main",
+}, scripts
 for name in ("component-reference.md", "decision-table.md", "error-guide.md"):
     assert (root / "docs" / name).is_file(), name
 assert not any(root.rglob("*.wasm*")), "core wheel contains a WASM runtime"
