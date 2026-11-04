@@ -113,6 +113,8 @@ def test_ensure_downloads_once_and_reuses_verified_cache(tmp_path: Path, monkeyp
     from botlab import _browser_runtime
 
     monkeypatch.setenv("BOTLAB_RUNTIME_CACHE_DIR", str(tmp_path / "cache"))
+    mirror = "https://mirror.example.test/botlab/browser-runtime.zip"
+    monkeypatch.setenv("BOTLAB_RUNTIME_URL", mirror)
     _dist(tmp_path)
     archive = tmp_path / "runtime.zip"
     export_browser_runtime(tmp_path / "BotLab", archive)
@@ -127,7 +129,19 @@ def test_ensure_downloads_once_and_reuses_verified_cache(tmp_path: Path, monkeyp
     assert (target / "assets/mujoco.wasm").read_bytes() == b"runtime"
     assert ensure_browser_runtime() == target
     assert len(downloaded) == 1
-    assert f"v{__version__}" in downloaded[0][0]
+    assert downloaded[0][0] == mirror
+
+
+def test_missing_runtime_without_a_source_names_both_local_installs(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("BOTLAB_RUNTIME_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.delenv("BOTLAB_RUNTIME_URL", raising=False)
+    with pytest.raises(BotLabError) as caught:
+        ensure_browser_runtime()
+    message = str(caught.value)
+    assert f"v{__version__}" in message
+    assert "ui sync --botlab" in message
+    assert "ui fetch --archive" in message
+    assert "BOTLAB_RUNTIME_URL" in message
 
 
 def test_failed_cache_swap_restores_previous_runtime(tmp_path: Path, monkeypatch):

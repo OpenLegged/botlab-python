@@ -25,11 +25,14 @@ MAX_FILES = 10000
 _EXCLUDED = {"d", "models", "templates"}
 
 
-def browser_runtime_url() -> str:
-    return (
-        "https://github.com/OpenLegged/botlab-python/releases/download/"
-        f"v{__version__}/botlab-browser-runtime-{__version__}.zip"
-    )
+def browser_runtime_url() -> str | None:
+    """Optional download mirror; this package never ships or hosts the runtime.
+
+    The browser runtime is built and distributed by the BotLab frontend. Point
+    ``BOTLAB_RUNTIME_URL`` at a mirror when automatic download is convenient;
+    otherwise install the archive produced by that checkout.
+    """
+    return os.environ.get("BOTLAB_RUNTIME_URL") or None
 
 
 def browser_runtime_cache_dir() -> Path:
@@ -229,6 +232,14 @@ def fetch_browser_runtime(*, url: str | None = None, archive: Path | None = None
     if archive is not None:
         return install_browser_runtime(archive)
     source_url = url or browser_runtime_url()
+    if source_url is None:
+        raise BotLabError(
+            f"Browser runtime v{__version__} is not installed and no download source is configured. "
+            "The runtime is built by the BotLab frontend, not shipped with this package: use "
+            "`botlab ui sync --botlab <BotLab checkout>` or "
+            "`botlab ui fetch --archive <botlab-browser-runtime.zip>`, "
+            "or set BOTLAB_RUNTIME_URL to download from a mirror."
+        )
     cache_root = browser_runtime_cache_dir().parent
     cache_root.mkdir(parents=True, exist_ok=True)
     fd, path = tempfile.mkstemp(prefix=".download-", suffix=".zip", dir=cache_root)
@@ -246,7 +257,8 @@ def fetch_browser_runtime(*, url: str | None = None, archive: Path | None = None
         except (urllib.error.URLError, TimeoutError, OSError) as error:
             raise BotLabError(
                 f"Could not download browser runtime v{__version__} from {source_url}: {error}. "
-                "Use `botlab ui fetch --archive <path>` for an offline archive."
+                "Use `botlab ui sync --botlab <BotLab checkout>` or "
+                "`botlab ui fetch --archive <botlab-browser-runtime.zip>` instead."
             ) from error
         return install_browser_runtime(download)
     finally:
@@ -257,10 +269,4 @@ def ensure_browser_runtime() -> Path:
     target = browser_runtime_cache_dir()
     if _validate_cache(target):
         return target
-    try:
-        return fetch_browser_runtime()
-    except BotLabError as error:
-        raise BotLabError(
-            f"Browser runtime v{__version__} is unavailable: {error} "
-            "Run `botlab ui fetch --archive <path>` or `botlab ui sync --botlab <checkout>`."
-        ) from error
+    return fetch_browser_runtime()

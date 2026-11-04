@@ -572,7 +572,7 @@ def build_parser() -> argparse.ArgumentParser:
     ui.add_argument("--botlab", default="~/Project/BotLab", help="path to a BotLab checkout")
     ui.add_argument("--out", help="versioned runtime archive output for ui export")
     ui.add_argument("--archive", help="offline runtime archive to install for ui fetch")
-    ui.add_argument("--url", help="runtime archive URL override for ui fetch")
+    ui.add_argument("--url", help="download the runtime archive from this mirror URL")
     ui.set_defaults(func=_cmd_ui)
 
     target = subparsers.add_parser("target", help="manage HIL target devices")

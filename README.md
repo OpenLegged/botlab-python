@@ -151,12 +151,12 @@ project(
 
 | Command | Description |
 | --- | --- |
-| `botlab run [DIR]` | Run in the browser: serve the complete editor (the platform web UI) from live sources; the browser executes the project and edits land on reload. `--native` executes locally instead (local MuJoCo + ONNX Runtime) with the browser as a read-only `?ws=` viewer. Neither writes a zip unless `--out` is provided. Supports `--verbose`, `--no-browser`, `--host`, and `--port`. |
+| `botlab run [DIR]` | Run in the browser: serve the complete editor (the platform web UI) from live sources; the browser executes the project and edits land on reload. Requires the installed browser runtime (see [Display frontend and browser runtime](#display-frontend-and-browser-runtime)). `--native` executes locally instead (local MuJoCo + ONNX Runtime) with the browser as a read-only `?ws=` viewer. Neither writes a zip unless `--out` is provided. Supports `--verbose`, `--no-browser`, `--host`, and `--port`. |
 | `botlab build [DIR]` | Export `release.zip` to the project directory or a path selected with `--out`. The output uses the same format as BotLab's hosted `/d/<id>/` demos. `--site <dir>` additionally assembles a self-contained static site (see below). |
 | `botlab validate [DIR]` | Collect declarations, compile the plan, and build the release in memory without starting a server. |
 | `botlab run [DIR] --headless` | Native headless run without the viewer server. Supports custom Python controllers and requires the `runtime` extra. |
 | `botlab ui sync --botlab <path>` | Synchronize the lightweight display frontend from `dist-viewer/` and cache the full browser runtime from `dist/` for local development. |
-| `botlab ui fetch` | Fetch the version-matched browser runtime when needed; `--archive <file>` imports an offline archive and `--url <url>` selects an explicit download source. |
+| `botlab ui fetch` | Install the browser runtime built by the BotLab frontend: `--archive <file>` imports an offline archive, `--url <url>` downloads from a mirror (or set `BOTLAB_RUNTIME_URL`). |
 | `botlab ui export --botlab <path> --out <file.zip>` | Export the separate version-matched browser runtime distribution from a BotLab build. |
 | `botlab ui status` | Show the status of the bundled UI snapshot. |
 | `botlab docs` | Print where the bundled docs (component reference, decision table, error guide) live in this install. |
@@ -277,26 +277,29 @@ native MuJoCo process. The browser renders the scene and lets you orbit and
 zoom the camera; physics and inference remain in CPython. Native preview,
 `validate`, and plain `build` do not fetch a browser runtime.
 
-Plain `run`, a served `run --out` preview, and `build --site` use a separate
-full browser runtime archive. On first use the CLI fetches the archive pinned
-to the installed package version from the matching GitHub release, verifies
-its manifest and file hashes, and installs it in the user cache. Later uses
-work offline. Download, version, or integrity errors stop the command and name
-the failing archive; execution does not silently switch to another runtime.
-The generated static site includes the needed WASM so visitors need no Python
-installation and make no runtime download through the CLI.
-
-For offline machines, import the exact matching archive first:
+Plain `run`, a served `run --out` preview, and `build --site` need a separate
+full browser runtime archive. That archive is built and distributed by the
+BotLab frontend, not by this package: the CLI never ships it and does not
+download it unless a mirror is configured. Install it from a BotLab checkout or
+from an archive the frontend team produced:
 
 ```bash
-botlab ui fetch --archive botlab-browser-runtime-0.4.0.zip
+botlab ui sync --botlab ../BotLab
+botlab ui fetch --archive botlab-browser-runtime-<version>.zip
 ```
 
-`botlab ui fetch --url <url>` allows a mirror. The default cache is
-`${XDG_CACHE_HOME:-~/.cache}/botlab/browser/<version>`;
-`BOTLAB_RUNTIME_CACHE_DIR` overrides the browser cache root. The optional
-runtime stays outside the installed Python package. `botlab ui status` shows
-the bundled display and cached browser runtime separately.
+The installed archive is verified against its manifest and file hashes and then
+cached for offline use. Missing, version-mismatched, or corrupt runtimes stop
+the command and name what to install; execution never silently switches to
+another runtime. The generated static site includes the needed WASM so visitors
+need no Python installation and make no runtime download through the CLI.
+
+`botlab ui fetch --url <url>` accepts an explicit mirror, and
+`BOTLAB_RUNTIME_URL` sets the default download mirror for a team that hosts one.
+The default cache is `${XDG_CACHE_HOME:-~/.cache}/botlab/browser/<version>`;
+`BOTLAB_RUNTIME_CACHE_DIR` overrides the browser cache root. The runtime stays
+outside the installed Python package. `botlab ui status` shows the bundled
+display and cached browser runtime separately.
 
 To generate both distributions from the source checkouts:
 
@@ -307,17 +310,16 @@ npm run build
 npm run build:viewer
 # In botlab-python:
 botlab ui sync --botlab ../BotLab
-botlab ui export --botlab ../BotLab --out tmp/botlab-browser-runtime-0.4.0.zip
+botlab ui export --botlab ../BotLab --out tmp/botlab-browser-runtime-<version>.zip
 uv build --wheel --out-dir tmp/core-wheel
 ```
 
 The generated display frontend is ignored by Git and bundled in the core
-wheel. The exported runtime archive is a separate release asset named
-`botlab-browser-runtime-<version>.zip`; attach it to the matching
-`v<version>` GitHub release alongside publishing the Python wheel. Until that
-asset is published, use `ui sync`, `ui fetch --archive`, or an explicit mirror.
-Runtime archives exclude built-in demo apps, templates, and shared models;
-project assets continue to be served from `/project/`.
+wheel. The exported runtime archive is the frontend distribution named
+`botlab-browser-runtime-<version>.zip`: the BotLab frontend publishes it and
+`botlab-python` only consumes it (`ui sync`, `ui fetch --archive`, or a
+configured mirror URL). Runtime archives exclude built-in demo apps, templates,
+and shared models; project assets continue to be served from `/project/`.
 
 ## Runtime model
 
@@ -386,9 +388,9 @@ its real synchronized display frontend. Verify the separate browser runtime
 archive used for website assembly too. From this checkout, with `uv` on PATH:
 
 ```bash
-python scripts/verify_wheel.py dist/pypi-0.4.0/botlab_python-0.4.0-py3-none-any.whl \
-  --browser-runtime tmp/botlab-browser-runtime-0.4.0.zip \
-  --out tmp/wheel-acceptance-0.4.0
+python scripts/verify_wheel.py dist/pypi-<version>/botlab_python-<version>-py3-none-any.whl \
+  --browser-runtime tmp/botlab-browser-runtime-<version>.zip \
+  --out tmp/wheel-acceptance-<version>
 ```
 
 Use a new output directory for each run. The command installs that wheel with
