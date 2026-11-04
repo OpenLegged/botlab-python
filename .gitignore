@@ -18,3 +18,7 @@ src/botlab/ui/
 
 # Local verification artifacts (screenshots, logs, scratch scripts)
 tmp/
+
+# Native library logs and stray session artifacts
+MUJOCO_LOG.TXT
+:memory:.ses

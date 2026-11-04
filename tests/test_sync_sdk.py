@@ -12,6 +12,8 @@ import pytest
 SYNTHETIC_PACKAGE = {
     "src/domain/python/botlab/__init__.py": "# sdk init\n",
     "src/domain/python/botlab/_signal.py": "# sdk module\n",
+    # read_config 解析器是镜像面的一部分：CLI 工程读 config/*.yaml 靠它。
+    "src/domain/python/botlab/_config.py": "# config reader\n",
 }
 PRESETS_MODULE = 'PRESETS = {"g1": {"kind": "robot", "config": {}}}\n'
 
@@ -61,6 +63,7 @@ def test_mirror_carries_only_flat_sdk_and_presets_verbatim(upstream, dist_root):
     sdk = dist_root / "src" / "botlab" / "sdk"
     assert (sdk / "__init__.py").read_text(encoding="utf-8") == "# sdk init\n"
     assert (sdk / "_signal.py").read_text(encoding="utf-8") == "# sdk module\n"
+    assert (sdk / "_config.py").read_text(encoding="utf-8") == "# config reader\n"
     assert not (sdk / "_runtime").exists()
     assert (dist_root / "src" / "botlab" / "_runtime" / "run.py").read_text(
         encoding="utf-8"

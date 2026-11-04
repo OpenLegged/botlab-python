@@ -70,6 +70,32 @@ def _text(value: Any, label: str) -> str:
     return value
 
 
+# 展示文案支持的界面语言；与 BotLab 前端 localizedText.ts、SDK _declaration.py 保持一致。
+_TEXT_LOCALES = ("en", "zh")
+
+
+def _localized_text(value: Any, label: str) -> str | dict:
+    """Display text: a non-empty string, or {"en": ..., "zh": ...} with "en" as fallback."""
+    if isinstance(value, str):
+        return _text(value, label)
+    if not isinstance(value, dict):
+        raise BotLabError(f'[botlab] {label} must be a non-empty string or a {{"en": ..., "zh": ...}} mapping')
+    unknown = sorted(set(value) - set(_TEXT_LOCALES))
+    if unknown:
+        raise BotLabError(f"[botlab] {label} has unsupported locales {unknown} (expected {list(_TEXT_LOCALES)})")
+    if "en" not in value:
+        raise BotLabError(f'[botlab] {label} must include an "en" entry')
+    table = {}
+    for locale in _TEXT_LOCALES:
+        if locale not in value:
+            continue
+        text = value[locale]
+        if not isinstance(text, str) or not text.strip():
+            raise BotLabError(f"[botlab] {label}.{locale} must be a non-empty string")
+        table[locale] = text.strip()
+    return table
+
+
 def _json_value(value: Any, label: str, _stack: frozenset[int] = frozenset()) -> Any:
     """Normalize a Python declaration value to its JS counterpart.
 
@@ -144,7 +170,7 @@ def _declared_parameter(pid: str, value: Any) -> dict:
         for option in value["options"]:
             if not isinstance(option, dict) or set(option) != {"label", "value"}:
                 raise BotLabError(f"[botlab] Parameter {pid!r} option requires only label and value")
-            label = _text(option["label"], f"Parameter {pid!r} option label")
+            label = _localized_text(option["label"], f"Parameter {pid!r} option label")
             number = _finite_number(option["value"], f"Parameter {pid!r} option value")
             if number != int(number) or abs(number) > 9007199254740991:
                 raise BotLabError(f"[botlab] Parameter {pid!r} option value must be a safe integer")
@@ -179,7 +205,7 @@ def _declared_parameter(pid: str, value: Any) -> dict:
     if step is not None:
         result["step"] = step
     if "label" in value:
-        result["label"] = _text(value["label"], f"Parameter {pid!r} label")
+        result["label"] = _localized_text(value["label"], f"Parameter {pid!r} label")
     if "unit" in value:
         result["unit"] = _text(value["unit"], f"Parameter {pid!r} unit")
     return result
@@ -202,8 +228,11 @@ def _assert_robot_config(resource: dict) -> None:
 class HostSession:
     """One Apply: import controller.py, collect declarations, capture the plan."""
 
-    def __init__(self, preset_lookup):
+    def __init__(self, preset_lookup, project_dir=None):
         self._preset_lookup = preset_lookup
+        # ``read_config`` reads project files by relative path; the declaration
+        # session is the one place that knows the directory they live in.
+        self._project_dir = None if project_dir is None else Path(project_dir)
         self._resources: list[dict] = []
         self._resource_ids: set[str] = set()
         self._parameters: dict[str, dict] = {}
@@ -403,6 +432,26 @@ class HostSession:
             return None
         return [parameter["min"], parameter["max"]]
 
+    def read_project_file(self, path):
+        """The raw text of one project file — what ``read_config`` parses.
+
+        Restricted to paths inside the project directory: no absolute paths,
+        no ``..``. The SDK additionally only ever asks for ``config/*.yaml``.
+        """
+        name = str(path)
+        if not name:
+            raise BotLabError("[botlab] read_project_file needs a project-relative path")
+        if Path(name).is_absolute() or ".." in name.replace("\\", "/").split("/"):
+            raise BotLabError(f"[botlab] project file {name!r} must stay inside the project directory")
+        if self._project_dir is None:
+            raise BotLabError(
+                f"[botlab] project file {name!r} needs a project directory; no declaration is active"
+            )
+        target = self._project_dir / name
+        if not target.is_file():
+            raise BotLabError(f"[botlab] project file {name!r} was not found in {self._project_dir}")
+        return target.read_text(encoding="utf-8")
+
     def log(self, level, source, message):
         # Info-level SDK chatter (sim.run(...) started) is compile detail the
         # debug loop keeps behind --verbose; warnings and errors always print.
@@ -485,9 +534,9 @@ def _active() -> HostSession:
     return session
 
 
-def begin_project_declaration(preset_lookup) -> HostSession:
+def begin_project_declaration(preset_lookup, project_dir=None) -> HostSession:
     global ACTIVE
-    ACTIVE = HostSession(preset_lookup)
+    ACTIVE = HostSession(preset_lookup, project_dir)
     return ACTIVE
 
 
@@ -524,7 +573,7 @@ class _ProjectStateView:
         end_project_declaration()
         self.directory = directory
         if directory is not None:
-            begin_project_declaration(_preset_lookup(Path(directory)))
+            begin_project_declaration(_preset_lookup(Path(directory)), directory)
 
     def _session(self) -> HostSession:
         session = ACTIVE or RUN_SESSION
@@ -609,6 +658,14 @@ def declareProject(name, control_hz, physics_hz, parameters, location=None):  # 
     _active().declare_project(name, control_hz, physics_hz, parameters)
 
 
+def declareProjectControl(control, location=None):  # noqa: N802
+    del location
+    # The control declaration is a browser-pairing concern: the paired page
+    # uploads it to the middleware at connect time. The native collector has
+    # no page to pair with and drops it.
+    del control
+
+
 def requireResource(rid, kind):  # noqa: N802
     return _active().require_resource(rid, kind)
 
@@ -621,6 +678,13 @@ def resourceSource(rid):  # noqa: N802
 def resourceConfig(rid, field):  # noqa: N802
     active = _active()
     return active.require_resource(rid, active._kind_of(rid))["config"].get(str(field))
+
+
+def read_project_file(path):
+    # The one snake_case member of the botlab_host surface: every host (browser
+    # JS bridge, offline host, native collector) exposes it under this name so
+    # the shared SDK's ``read_config`` call site never branches per host.
+    return _active().read_project_file(path)
 
 
 # List-returning queries stay plain (no JsProxy-style wrapper): the SDK's

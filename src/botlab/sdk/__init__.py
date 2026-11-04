@@ -4,8 +4,16 @@ Everything public is re-exported here; import names from ``botlab`` only.
 """
 
 from ._compat import create_proxy
+from ._config import read_config
 from ._controllers import Controller, PolicyController, PositionController
-from ._declaration import default_joint_positions, project, resource_config
+from ._declaration import (
+    action,
+    control_profile,
+    declare_control,
+    default_joint_positions,
+    project,
+    resource_config,
+)
 from ._history import history, resize
 from ._math import (
     absolute,
@@ -89,6 +97,7 @@ __all__ = [
     "Signal",
     "Simulation",
     "absolute",
+    "action",
     "affine",
     "all_of",
     "any_of",
@@ -96,9 +105,11 @@ __all__ = [
     "clock",
     "concat",
     "constant",
+    "control_profile",
     "cos",
     "cross",
     "default_joint_positions",
+    "declare_control",
     "delay",
     "derivative",
     "dot",
@@ -127,6 +138,7 @@ __all__ = [
     "quaternion_multiply",
     "quaternion_slerp",
     "quaternion_yaw",
+    "read_config",
     "reduce_max",
     "reduce_min",
     "reduce_sum",
