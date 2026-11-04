@@ -27,8 +27,13 @@ def authority(tmp_path_factory) -> Path:
     def run(*args: str) -> None:
         subprocess.run(["openssl", *args], check=True, capture_output=True, cwd=root)
 
+    # Python 3.13 verifies with VERIFY_X509_STRICT by default: a CA without
+    # basicConstraints/keyUsage is rejected ("CA cert does not include key usage
+    # extension"), so the fixture CA carries the extensions a real CA has.
     run("req", "-x509", "-newkey", "rsa:2048", "-keyout", "ca.key", "-out", "ca.crt",
-        "-days", "2", "-nodes", "-subj", "/CN=BotLab Test CA")
+        "-days", "2", "-nodes", "-subj", "/CN=BotLab Test CA",
+        "-addext", "basicConstraints=critical,CA:TRUE",
+        "-addext", "keyUsage=critical,keyCertSign,cRLSign")
     run("req", "-newkey", "rsa:2048", "-keyout", "server.key", "-out", "server.csr",
         "-nodes", "-subj", "/CN=localhost")
     (root / "san.ext").write_text("subjectAltName=DNS:localhost,IP:127.0.0.1\n")
