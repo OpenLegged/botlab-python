@@ -318,6 +318,7 @@ def test_embedded_remote_scripts_are_valid_python(name):
 def test_open_tunnel_holds_exec_session_and_waits_for_real_hello(monkeypatch):
     import socket
     import threading
+
     from botlab.hil.protocol import receive, send
 
     calls = []
@@ -373,6 +374,7 @@ def test_open_tunnel_holds_exec_session_and_waits_for_real_hello(monkeypatch):
 def test_invalid_agent_hello_closes_exec_and_credentials(monkeypatch):
     import socket
     import threading
+
     from botlab.hil.protocol import receive, send
 
     seen = {}
@@ -453,6 +455,7 @@ with Server(('127.0.0.1', PORT), Handler) as server:
 def _wait_agent_port(port, children, timeout=5):
     import socket
     import time
+
     from botlab.hil.protocol import receive, send
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:

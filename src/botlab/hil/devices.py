@@ -22,8 +22,8 @@ import sys
 import tarfile
 import tempfile
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 from .protocol import HilError, error_details, receive, send
 
@@ -36,8 +36,8 @@ _REQUIREMENTS = ("numpy>=1.24,<3", "onnxruntime>=1.18,<2", "PyYAML>=6.0,<7")
 
 def _run(argv, *, data=None, env=None, timeout=30, check=True):
     try:
-        result = subprocess.run(argv, input=data, stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE, env=env, timeout=timeout)
+        result = subprocess.run(argv, input=data, capture_output=True,
+                                env=env, timeout=timeout)
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise HilError(f"Device command failed: {type(exc).__name__}") from exc
     if check and result.returncode:

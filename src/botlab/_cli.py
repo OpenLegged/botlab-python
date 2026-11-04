@@ -389,6 +389,7 @@ def _bench_target(with_host, args) -> dict:
 
 def _cmd_target(args: argparse.Namespace) -> int:
     import json
+
     from .hil import HilHost
 
     with_host = HilHost(Path.cwd())
@@ -450,6 +451,7 @@ def _cmd_target(args: argparse.Namespace) -> int:
 
 def _cmd_deploy(args: argparse.Namespace) -> int:
     import json
+
     from .hil import HilHost
     host = HilHost(Path(args.project_dir or "."))
     body = {"target": args.target}

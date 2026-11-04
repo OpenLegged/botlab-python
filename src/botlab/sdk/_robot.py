@@ -7,6 +7,7 @@ from ._declaration import (
     _host_list,
     _host_snapshot,
     _host_value,
+    _localized_text,
     _non_empty_string,
     _policy_pd_vector,
     default_joint_positions,
@@ -646,10 +647,7 @@ class Robot:
                         )
                 normalized = {**key_data, "values": values}
                 if "label" in mapping:
-                    normalized["label"] = _non_empty_string(
-                        mapping["label"],
-                        f"{label} label",
-                    )
+                    normalized["label"] = _localized_text(mapping["label"], f"{label} label")
                 normalized_mappings.append(normalized)
             data["commandEncoding"] = "mapped"
             data["commandMappings"] = normalized_mappings

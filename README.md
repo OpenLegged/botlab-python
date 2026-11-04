@@ -289,7 +289,7 @@ installation and make no runtime download through the CLI.
 For offline machines, import the exact matching archive first:
 
 ```bash
-botlab ui fetch --archive botlab-browser-runtime-0.3.0.zip
+botlab ui fetch --archive botlab-browser-runtime-0.4.0.zip
 ```
 
 `botlab ui fetch --url <url>` allows a mirror. The default cache is
@@ -307,7 +307,7 @@ npm run build
 npm run build:viewer
 # In botlab-python:
 botlab ui sync --botlab ../BotLab
-botlab ui export --botlab ../BotLab --out tmp/botlab-browser-runtime-0.3.0.zip
+botlab ui export --botlab ../BotLab --out tmp/botlab-browser-runtime-0.4.0.zip
 uv build --wheel --out-dir tmp/core-wheel
 ```
 
@@ -386,9 +386,9 @@ its real synchronized display frontend. Verify the separate browser runtime
 archive used for website assembly too. From this checkout, with `uv` on PATH:
 
 ```bash
-python scripts/verify_wheel.py dist/pypi-0.3.0/botlab_python-0.3.0-py3-none-any.whl \
-  --browser-runtime tmp/botlab-browser-runtime-0.3.0.zip \
-  --out tmp/wheel-acceptance-0.3.0
+python scripts/verify_wheel.py dist/pypi-0.4.0/botlab_python-0.4.0-py3-none-any.whl \
+  --browser-runtime tmp/botlab-browser-runtime-0.4.0.zip \
+  --out tmp/wheel-acceptance-0.4.0
 ```
 
 Use a new output directory for each run. The command installs that wheel with
