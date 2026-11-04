@@ -7,7 +7,7 @@ name = "botlab-python"
 version = "0.3.0"
 description = "Python-first robot simulation and control in the browser."
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = { text = "Proprietary" }
 authors = [{ name = "OpenLegged" }]
 keywords = ["robotics", "mujoco", "onnx", "rl", "simulation", "sim2sim"]
@@ -17,7 +17,6 @@ classifiers = [
   "Intended Audience :: Science/Research",
   "Operating System :: OS Independent",
   "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
@@ -34,8 +33,19 @@ Repository = "https://github.com/OpenLegged/botlab-python"
 
 [project.scripts]
 botlab = "botlab._cli:main"
+botlab-agent = "botlab.hil.agent:main"
+botlab-hil-gateway = "botlab.hil.gateway:main"
 
 [project.optional-dependencies]
+# Target inference only; no native physics or browser dependencies.
+# websockets is pure Python and only needed for gateway (outbound) mode.
+# >=17.1: the long-lived (non-context-manager) dial needs the legacy flag.
+target = ["numpy>=1.24", "onnxruntime>=1.18", "websockets>=17.1"]
+# Run the device gateway standalone.
+gateway = ["websockets>=17.1"]
+# `botlab control serve`: the generic browser-pairing middleware. The client
+# CLI stays stdlib-only; aiohttp enters the process only in the serve branch.
+serve = ["aiohttp>=3.9"]
 # Native simulation via `botlab run`: native MuJoCo physics +
 # onnxruntime inference (CPU out of the box; GPU needs onnxruntime-gpu with
 # matching CUDA). Without these the CLI still compiles and packages projects.
@@ -43,12 +53,13 @@ runtime = [
   "numpy>=1.24",
   "mujoco>=3.2",
   "onnxruntime>=1.18",
-  "websockets>=12",
+  "websockets>=17.1",
 ]
 dev = [
   "pytest>=8.0",
   "ruff>=0.6",
   "botlab-python[runtime]",
+  "botlab-python[serve]",
   # Enables the packaging-time ONNX asset validation in dev/CI; without it
   # botlab build packages model bytes as-is.
   "onnx>=1.16",
@@ -76,7 +87,7 @@ include = [
 
 [tool.ruff]
 line-length = 100
-target-version = "py310"
+target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B"]

@@ -2,6 +2,7 @@
 import inspect
 import math
 import os
+import re
 
 import botlab_host
 
@@ -147,6 +148,236 @@ def project(name, *, control_hz=None, physics_hz=None, parameters=None):
         control_hz,
         physics_hz,
         _plan_value({} if parameters is None else parameters, "project parameters"),
+        _declaration_location(),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Control profile
+#
+# The external CLI-control face is declared, not derived: which parameter is
+# the vx axis, what an action is called and which policy states it may start
+# from are project decisions the compiled plan cannot guess. The declaration
+# travels in the manifest; the browser page cross-checks it against the
+# compiled plan before uploading a control descriptor to a middleware.
+# ---------------------------------------------------------------------------
+
+_CONTROL_SCHEMA = "botlab.control.profile.v1"
+_CONTROL_NAME = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+_CONTROL_CAPABILITY = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$")
+_CONTROL_RESERVED_CAPABILITIES = ("motion.twist", "control.stop")
+_CONTROL_EXPERIENCE_LIMIT = 32768
+_CANONICAL_DECIMAL_STATE_KEY = re.compile(r"^(0|[1-9][0-9]*)$")
+
+
+def _state_code_key(key):
+    """State codes arrive as ints from Python and as canonical decimal strings
+    from restricted YAML, whose mapping keys can only be strings."""
+    if isinstance(key, bool):
+        raise ValueError("control_profile states keys must be integer state codes")
+    if isinstance(key, int):
+        return key
+    if isinstance(key, str) and _CANONICAL_DECIMAL_STATE_KEY.match(key):
+        return int(key)
+    raise ValueError("control_profile states keys must be integer state codes")
+
+
+def _control_state_code(value, label):
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"{label} must be non-negative integers")
+    return value
+
+
+def _control_state_codes(value, label):
+    codes = list(value) if isinstance(value, (list, tuple)) else None
+    if not codes:
+        raise ValueError(f"{label} must be a non-empty sequence of state codes")
+    codes = [_control_state_code(code, label) for code in codes]
+    if len(set(codes)) != len(codes):
+        raise ValueError(f"{label} must not repeat states")
+    return codes
+
+
+def action(name, event_value, *, allowed_states, target_states, capability=None, idempotent=False):
+    """Declare one named action for a :func:`control_profile`.
+
+    ``name`` is the CLI alias an AI assistant calls. ``event_value`` must be one
+    of the mapped command values the project feeds its ``state_machine(...)``.
+    ``allowed_states`` are the policy states the action may start from and
+    ``target_states`` the steady states it reaches -- declared explicitly, never
+    derived from the state machine's transitions. ``capability`` defaults to
+    ``action.<name>``.
+    """
+    return _normalize_action(
+        {
+            "name": name,
+            "event_value": event_value,
+            "allowed_states": allowed_states,
+            "target_states": target_states,
+            "capability": capability,
+            "idempotent": idempotent,
+        },
+        "control action",
+    )
+
+
+_ACTION_FIELDS = ("name", "event_value", "allowed_states", "target_states", "capability", "idempotent")
+
+
+def _normalize_action(item, label):
+    """Validate and normalize one action mapping.
+
+    ``action(...)`` declarations and plain mappings (the ones a project reads
+    from ``config/control.yaml`` via :func:`read_config`) share this path:
+    ``capability`` and ``idempotent`` default the same way, unknown fields are
+    rejected rather than silently dropped.
+    """
+    if not isinstance(item, dict):
+        raise TypeError(f"{label} must come from action(...)")
+    unknown = set(item) - set(_ACTION_FIELDS)
+    if unknown:
+        raise ValueError(f"{label} has unknown fields {sorted(unknown)}")
+    name = item.get("name")
+    if not isinstance(name, str) or not _CONTROL_NAME.match(name):
+        raise ValueError(f'{label} name "{name}" must match ^[a-z][a-z0-9_]{{0,63}}$')
+    event_value = item.get("event_value")
+    if isinstance(event_value, bool) or not isinstance(event_value, int) or event_value == 0:
+        raise ValueError(f'{label} "{name}" event_value must be a non-zero integer')
+    resolved_capability = f"action.{name}" if item.get("capability") is None else item["capability"]
+    if (
+        not isinstance(resolved_capability, str)
+        or not _CONTROL_CAPABILITY.match(resolved_capability)
+        or resolved_capability in _CONTROL_RESERVED_CAPABILITIES
+    ):
+        raise ValueError(
+            f'{label} "{name}" capability "{resolved_capability}" must be '
+            "dotted lowercase and must not use motion.twist or control.stop"
+        )
+    idempotent = item.get("idempotent", False)
+    if not isinstance(idempotent, bool):
+        raise TypeError(f'{label} "{name}" idempotent must be a boolean')
+    return {
+        "name": name,
+        "event_value": event_value,
+        "allowed_states": _control_state_codes(
+            item.get("allowed_states"), f'{label} "{name}" allowed_states'
+        ),
+        "target_states": _control_state_codes(
+            item.get("target_states"), f'{label} "{name}" target_states'
+        ),
+        "capability": resolved_capability,
+        "idempotent": idempotent,
+    }
+
+
+def _control_state_node(value):
+    """The plan node id string naming the state machine the descriptor drives.
+
+    A state_machine(...) signal compiles to exactly one ``proc-state-machine``
+    node whose id is its label ("state-machine"); the paired page cross-checks
+    the declared name against the compiled plan before uploading anything.
+    """
+    return _non_empty_string(value, "control_profile state_node")
+
+
+def control_profile(
+    robot,
+    *,
+    state_node,
+    vx,
+    yaw_rate,
+    event,
+    actions=(),
+    motion_states=None,
+    states=None,
+    experience=None,
+):
+    """Declare the external CLI-control face of the project.
+
+    ``robot`` is a ``Robot(...)`` handle, ``state_node`` the plan node id of the
+    ``state_machine(...)`` driving the policy modes, and ``vx`` / ``yaw_rate`` /
+    ``event`` the project parameter names of the motion axes and the command
+    event. Pass the result to :func:`declare_control`; the browser page
+    cross-checks it against the compiled plan before pairing with a
+    ``botlab control serve`` middleware.
+    """
+    items = list(actions) if isinstance(actions, (list, tuple)) else None
+    if not items:
+        raise ValueError("control_profile actions must be a non-empty sequence of action(...) declarations")
+    declared_actions = []
+    names = set()
+    capabilities = set()
+    event_values = []
+    for index, item in enumerate(items):
+        declared = _normalize_action(item, f"control_profile actions[{index}]")
+        if declared["name"] in names:
+            raise ValueError(f'duplicate control action name "{declared["name"]}"')
+        names.add(declared["name"])
+        if declared["capability"] in capabilities:
+            raise ValueError(f'duplicate control capability id "{declared["capability"]}"')
+        capabilities.add(declared["capability"])
+        if declared["event_value"] not in event_values:
+            event_values.append(declared["event_value"])
+        declared_actions.append(declared)
+
+    motion_states_codes = (
+        None if motion_states is None
+        else _control_state_codes(motion_states, "control_profile motion_states")
+    )
+
+    state_names = None
+    if states is not None:
+        if not isinstance(states, dict) or not states:
+            raise ValueError("control_profile states must be a non-empty mapping of state code to name")
+        state_names = {}
+        for key, value in states.items():
+            code = _state_code_key(key)
+            if not isinstance(value, str) or not value:
+                raise ValueError(f'control_profile states[{code}] must be a non-empty string')
+            state_names[str(code)] = value
+
+    if experience is not None:
+        if not isinstance(experience, str) or not experience:
+            raise ValueError("control_profile experience must be a non-empty string")
+        if len(experience.encode("utf-8")) > _CONTROL_EXPERIENCE_LIMIT:
+            raise ValueError(
+                f"control_profile experience exceeds {_CONTROL_EXPERIENCE_LIMIT} bytes"
+            )
+
+    axis_vx = _non_empty_string(vx, "control_profile vx")
+    axis_yaw = _non_empty_string(yaw_rate, "control_profile yaw_rate")
+    event_parameter = _non_empty_string(event, "control_profile event")
+    if len({axis_vx, axis_yaw, event_parameter}) != 3:
+        raise ValueError("control_profile vx, yaw_rate and event must be distinct parameters")
+
+    return {
+        "schema": _CONTROL_SCHEMA,
+        "robot": _resource_source(robot, "control_profile robot"),
+        "state_node": _control_state_node(state_node),
+        "motion_parameters": {"vx": axis_vx, "yaw_rate": axis_yaw},
+        "event_parameter": event_parameter,
+        "motion_states": motion_states_codes,
+        "states": state_names,
+        "experience": experience,
+        "actions": declared_actions,
+    }
+
+
+def _control_profile_value(control):
+    if not isinstance(control, dict) or control.get("schema") != _CONTROL_SCHEMA:
+        raise TypeError("declare_control expects a control_profile(...) declaration")
+    return control
+
+
+def declare_control(control):
+    """Attach a :func:`control_profile` to the project declaration.
+
+    Call it after ``project()``: the profile's motion and event axes must be
+    declared parameters, and the browser page only pairs a project whose
+    declaration matches its compiled plan.
+    """
+    botlab_host.declareProjectControl(
+        _plan_value(_control_profile_value(control), "project control"),
         _declaration_location(),
     )
 

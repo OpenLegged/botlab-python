@@ -13,7 +13,9 @@ from __future__ import annotations
 import hashlib
 import importlib
 import json
+import re
 import sys
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -37,8 +39,9 @@ RELEASE_VERSION = 3
 SIMULATION_ENGINE_ABI_VERSION = 1
 MAX_PYTHON_RELEASE_PACKAGE_BYTES = 200 * 1024 * 1024
 
-# Flat project files a release may carry besides main.py / controller.py.
-SAFE_PROJECT_SUFFIXES = (".py", PRESET_FILE_SUFFIX)
+# Declaration compilation uses process-global host state and imported modules.
+# Browser release requests and asynchronous HIL builds must share this lock.
+PROJECT_LOAD_LOCK = threading.RLock()
 
 
 def is_standard_python_main(source: str | None) -> bool:
@@ -50,11 +53,86 @@ def _is_safe_archive_path(path: str) -> bool:
         return False
     if ":" in path.split("/")[0] and len(path.split("/")[0]) > 1:
         # scheme-ish prefix like "http:" — mirror the TS regex test.
-        import re
-
         if re.match(r"^[A-Za-z][A-Za-z0-9+.-]*:", path):
             return False
     return all(part not in ("", ".", "..") for part in path.split("/"))
+
+
+# -- project text file paths -------------------------------------------------
+#
+# is_project_text_file mirrors the editor's isProjectTextFilePath
+# (src/domain/low-code/projectFilePaths.ts in BotLab): which project files are
+# text declarations shipped in ``files`` and which stay binary assets. The
+# browser publish path and this CLI must cut the same file set out of the same
+# project or the release digests diverge — change both sides together.
+
+_NAME_SEGMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+_PRESET_BASE = re.compile(r"[A-Za-z_][A-Za-z0-9_-]*")
+_PRESET_SUFFIX = PRESET_FILE_SUFFIX
+_RESERVED_DIRECTORY_SEGMENTS = frozenset({"botlab"})
+_TEXT_FILE_EXTENSIONS = frozenset({
+    "md", "markdown", "txt", "json", "jsonc", "yaml", "yml", "toml", "ini",
+    "cfg", "csv", "xml", "html", "css", "js", "jsx", "ts", "tsx", "sh",
+})
+
+
+def _is_word_character(character: str) -> bool:
+    # TS \p{L}\p{N}: str.isalpha/str.isnumeric are exactly the Unicode
+    # letter and number categories.
+    return character.isalpha() or character.isnumeric()
+
+
+def _is_python_source_path(relative: str) -> bool:
+    parts = relative.split("/")
+    file_name = parts.pop()
+    if file_name.endswith(".py"):
+        if not _NAME_SEGMENT.fullmatch(file_name[: -len(".py")]):
+            return False
+    elif file_name.endswith(_PRESET_SUFFIX):
+        if not _PRESET_BASE.fullmatch(file_name[: -len(_PRESET_SUFFIX)]):
+            return False
+    else:
+        return False
+    return all(
+        _NAME_SEGMENT.fullmatch(segment) and segment not in _RESERVED_DIRECTORY_SEGMENTS
+        for segment in parts
+    )
+
+
+def _is_text_directory_segment(segment: str) -> bool:
+    body = segment[1:] if segment.startswith(".") else segment
+    if not body or not (_is_word_character(body[0]) or body[0] == "_"):
+        return False
+    return all(_is_word_character(c) or c in ("_", "-") for c in body)
+
+
+def _is_text_file_name(name: str) -> bool:
+    stem, dot, extension = name.rpartition(".")
+    if not dot or extension not in _TEXT_FILE_EXTENSIONS:
+        return False
+    if not (_is_word_character(name[0]) or name[0] == "_"):
+        return False
+    return all(_is_word_character(c) or c in ("_", " ", ".", "-") for c in stem)
+
+
+def is_project_text_file(relative: str) -> bool:
+    """Editor isProjectTextFilePath, mirrored: .py/.preset.yaml follow the
+    Python module path rules, other text files a looser unicode name rule;
+    assets/ and botlab/ stay out of the text set."""
+    if relative.endswith(".py") or relative.endswith(_PRESET_SUFFIX):
+        return _is_python_source_path(relative)
+    if not _is_safe_archive_path(relative) or relative == "botlab.project.json":
+        return False
+    parts = relative.split("/")
+    file_name = parts.pop()
+    if not _is_text_file_name(file_name):
+        return False
+    if parts and not all(
+        _is_text_directory_segment(segment) and segment not in _RESERVED_DIRECTORY_SEGMENTS
+        for segment in parts
+    ):
+        return False
+    return not parts or parts[0] not in ("assets", "botlab")
 
 
 @dataclass(frozen=True)
@@ -116,20 +194,48 @@ def _preset_lookup(project_dir: Path):
     return lookup
 
 
-def _project_source_files(project_dir: Path) -> dict[str, str]:
-    files: dict[str, str] = {}
-    for entry in sorted(project_dir.iterdir()):
-        if not entry.is_file():
+def walk_project_files(project_dir: Path):
+    """Yield ``(relative_posix, path)`` for every real file under the project.
+
+    Skips symlinks and local noise — dot entries at any depth, a root
+    ``release.zip``/``tmp``, ``__pycache__``/``node_modules`` anywhere — so
+    VCS metadata, the ``.botlab/`` project identity written between builds,
+    and editor scratch never reach classification. The source collector and
+    the local payload server share this walk: whatever the editor sees as
+    text files must be exactly what the release digest covers.
+    """
+    for entry in sorted(project_dir.rglob("*")):
+        if entry.is_symlink() or not entry.is_file():
             continue
-        if entry.name == "botlab.yaml":
+        relative = entry.relative_to(project_dir)
+        parts = relative.parts
+        if any(part.startswith(".") for part in parts):
+            continue
+        if parts[0] in ("release.zip", "tmp") or any(
+            part in ("__pycache__", "node_modules") for part in parts
+        ):
+            continue
+        yield relative.as_posix(), entry
+
+
+def _project_source_files(project_dir: Path) -> dict[str, str]:
+    """Every project text file, collected recursively like the editor does.
+
+    ``config/*.yaml`` declarations, nested Python packages and docs travel in
+    ``files`` next to main.py/controller.py; classification is
+    is_project_text_file's job.
+    """
+    files: dict[str, str] = {}
+    for posix, entry in walk_project_files(project_dir):
+        if posix == "botlab.yaml":
             if entry.stat().st_size > 0:
                 raise BotLabError(
                     "A non-empty botlab.yaml is the legacy browser format; the offline CLI "
                     "only packages Python-declared projects (empty or missing YAML)."
                 )
             continue
-        if entry.name in ("main.py", "controller.py") or entry.name.endswith(SAFE_PROJECT_SUFFIXES):
-            files[entry.name] = entry.read_text(encoding="utf-8")
+        if is_project_text_file(posix):
+            files[posix] = entry.read_text(encoding="utf-8")
     if "main.py" not in files:
         raise BotLabError('A BotLab project requires "main.py".')
     if "controller.py" not in files:
@@ -217,24 +323,31 @@ def python_release_project_digest(manifest: dict, files: dict[str, str]) -> str:
 
 
 def evict_project_modules(project_dir: Path) -> None:
-    """Drop cached top-level project modules from ``sys.modules``.
+    """Drop cached project modules (nested packages included) from ``sys.modules``.
 
     A previous load_project or run in this process leaves ``controller``/
     ``main`` (and any sibling module) imported; re-importing the cache would
     run no declarations against a fresh session — the same eviction
-    pyodideRuntime.stageProjectModules performs before staging sources.
-    Every path that re-opens a project goes through this helper so the
-    eviction set cannot drift between callers.
+    pyodideRuntime.stageProjectModules performs before staging sources
+    (``pkg/helpers.py`` caches under ``pkg.helpers``). Every path that
+    re-opens a project goes through this helper so the eviction set cannot
+    drift between callers.
     """
     for name in ("controller", "main"):
         sys.modules.pop(name, None)
-    for entry in project_dir.iterdir():
-        if entry.is_file() and entry.suffix == ".py":
-            sys.modules.pop(entry.stem, None)
+    for entry in project_dir.rglob("*.py"):
+        if entry.is_symlink() or not entry.is_file():
+            continue
+        parts = entry.relative_to(project_dir).parts
+        # ``pkg/__init__.py`` caches under the package name ``pkg``.
+        if entry.stem == "__init__" and len(parts) > 1:
+            sys.modules.pop(".".join(parts[:-1]), None)
+        else:
+            sys.modules.pop(".".join((*parts[:-1], entry.stem)), None)
 
 
 def _import_controller(project_dir: Path, source_files: dict[str, str]) -> _host.HostSession:
-    session = _host.begin_project_declaration(_preset_lookup(project_dir))
+    session = _host.begin_project_declaration(_preset_lookup(project_dir), project_dir)
     sys.path.insert(0, str(project_dir))
     try:
         evict_project_modules(project_dir)
@@ -246,6 +359,11 @@ def _import_controller(project_dir: Path, source_files: dict[str, str]) -> _host
 
 def load_project(project_dir: Path) -> LoadedProject:
     """Apply the project: collect declarations, run main.py, capture the plan."""
+    with PROJECT_LOAD_LOCK:
+        return _load_project(project_dir)
+
+
+def _load_project(project_dir: Path) -> LoadedProject:
     project_dir = project_dir.resolve()
     if not project_dir.is_dir():
         raise BotLabError(f"Project directory does not exist: {project_dir}")
