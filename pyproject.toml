@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "botlab-python"
-version = "0.4.0"
+version = "0.4.1"
 description = "Python-first robot simulation and control in the browser."
 readme = "README.md"
 requires-python = ">=3.11"
