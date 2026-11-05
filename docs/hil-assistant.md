@@ -38,12 +38,18 @@ botlab-hil-gateway --host 127.0.0.1 --port 50060 --print-token
 BOTLAB_HIL_TOKEN=<令牌> botlab-agent connect --gateway ws://127.0.0.1:50060 --device my-laptop
 ```
 
-两个进程保持前台运行。验证标准：agent 日志出现 `BotLab HIL agent: registered as <id> (onnxruntime)`，且 `lsof -iTCP:50060` 显示 ESTABLISHED。助手可代跑（会话后台任务），但必须告知用户进程随会话结束而停止，并附自行重启的两条终端命令。
+两个进程保持前台运行。注意：`registered` 日志打印在网关校验令牌**之前**——错令牌也会先出现 registered 再 `gateway link dropped`。验证标准：registered 之后链路保持（无 dropped），且 `lsof -iTCP:50060` 显示 ESTABLISHED；最终以浏览器设备窗口点「连接」成功为准。助手可代跑（会话后台任务），但必须告知用户进程随会话结束而停止，并附自行重启的两条终端命令。
 
 ## 4. 场景 B 命令（板卡直连本机 + SSH 隧道）
 
 两段 `ws://` 都不离开各自主机回环（浏览器拨本机回环、agent 拨板卡回环），跨网线
 流量由 SSH 加密，因此不需要域名、证书或 `wss://`。
+
+**先做硬件适配**：SSH 可达后先识别板卡——`cat /proc/device-tree/model`、
+`. /etc/os-release && echo "$PRETTY_NAME"`——再对照仓库 [`skills/`](../skills/README.md)
+目录（读各 `skills/*/SKILL.md` 的 frontmatter）。命中则把该 skill 作为本节的板卡侧
+补充（默认组网、系统坑、实测版本都写在里面，只加载命中的那一份）；未命中则按本节
+通用命令走，跑通后欢迎按 `skills/README.md` 回来贡献一个。
 
 ```bash
 # 助手机（有外网 + 本仓库 checkout）：构建本包 wheel + 按板卡标签下载依赖 wheel
@@ -80,8 +86,7 @@ ssh -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 \
   -L 50060:127.0.0.1:50060 <用户>@<板卡地址>
 ```
 
-验证标准：板卡终端 2 出现 `BotLab HIL agent: registered as <id> (onnxruntime)`；
-本机 `lsof -nP -iTCP:50060` 显示 ssh 监听 `127.0.0.1:50060`。
+验证标准：板卡终端 2 出现 `BotLab HIL agent: registered as <id> (onnxruntime)` 且**之后无** `gateway link dropped`（registered 打印在令牌校验之前，错令牌也会先出现）；本机 `lsof -nP -iTCP:50060` 显示 ssh 监听 `127.0.0.1:50060`；最终以浏览器设备窗口点「连接」成功为准。
 
 ## 5. 安全规则
 
@@ -89,7 +94,7 @@ ssh -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 \
 
 ## 6. 交付
 
-跑通后把「**网关端点 / 设备 ID / 令牌**」三项列表交给用户，并提醒：回浏览器「设备网关」面板粘贴三项后点「连接」。
+跑通后把「**网关端点 / 设备 ID / 令牌**」三项列表交给用户，并提醒：回浏览器工程树「硬件」分支添加设备（填端点与设备 ID，名称自定），再对设备行点「连接…」输入令牌——令牌只在连接对话框内存中出现，不会被保存。
 
 ## 7. 出错纪律
 
@@ -101,5 +106,6 @@ ssh -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 \
 - 离线装报 `from versions: none` → wheel 的 cp/ABI 标签与板卡 venv 的 Python 不一致，按 venv 实际版本重新 `pip download`。
 - 装不上 `websockets>=17.1`（17.x Requires-Python ≥3.11）→ 板卡 Python 太旧，用独立 CPython 建 venv；不要降级 16.x（拨号传 `legacy=True` 会 TypeError）。
 - 浏览器连不上但板卡 agent 已注册 → 本机 `ssh -L` 隧道断了或本机 50060 被占，`lsof -nP -iTCP:50060` 查明后重跑隧道命令。
+- 板卡特有报错（系统时钟漂移、远端 `pkill` 自匹配、系统 Python 缺组件等）→ 先查 `skills/<硬件>/SKILL.md` 的实测坑清单，再按通用路径排查。
 
 架构与协议背景见 [hil.md](hil.md)。
