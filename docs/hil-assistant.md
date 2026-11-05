@@ -38,7 +38,7 @@ botlab-hil-gateway --host 127.0.0.1 --port 50060 --print-token
 BOTLAB_HIL_TOKEN=<令牌> botlab-agent connect --gateway ws://127.0.0.1:50060 --device my-laptop
 ```
 
-两个进程保持前台运行。验证标准：agent 日志出现 `BotLab HIL agent: registered as <id> (onnxruntime)`，且 `lsof -iTCP:50060` 显示 ESTABLISHED。助手可代跑（会话后台任务），但必须告知用户进程随会话结束而停止，并附自行重启的两条终端命令。
+两个进程保持前台运行。注意：`registered` 日志打印在网关校验令牌**之前**——错令牌也会先出现 registered 再 `gateway link dropped`。验证标准：registered 之后链路保持（无 dropped），且 `lsof -iTCP:50060` 显示 ESTABLISHED；最终以浏览器设备窗口点「连接」成功为准。助手可代跑（会话后台任务），但必须告知用户进程随会话结束而停止，并附自行重启的两条终端命令。
 
 ## 4. 场景 B 命令（板卡直连本机 + SSH 隧道）
 
@@ -86,8 +86,7 @@ ssh -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 \
   -L 50060:127.0.0.1:50060 <用户>@<板卡地址>
 ```
 
-验证标准：板卡终端 2 出现 `BotLab HIL agent: registered as <id> (onnxruntime)`；
-本机 `lsof -nP -iTCP:50060` 显示 ssh 监听 `127.0.0.1:50060`。
+验证标准：板卡终端 2 出现 `BotLab HIL agent: registered as <id> (onnxruntime)` 且**之后无** `gateway link dropped`（registered 打印在令牌校验之前，错令牌也会先出现）；本机 `lsof -nP -iTCP:50060` 显示 ssh 监听 `127.0.0.1:50060`；最终以浏览器设备窗口点「连接」成功为准。
 
 ## 5. 安全规则
 
@@ -95,7 +94,7 @@ ssh -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 \
 
 ## 6. 交付
 
-跑通后把「**网关端点 / 设备 ID / 令牌**」三项列表交给用户，并提醒：回浏览器「设备网关」面板粘贴三项后点「连接」。
+跑通后把「**网关端点 / 设备 ID / 令牌**」三项列表交给用户，并提醒：回浏览器工程树「硬件」分支添加设备（填端点与设备 ID，名称自定），再对设备行点「连接…」输入令牌——令牌只在连接对话框内存中出现，不会被保存。
 
 ## 7. 出错纪律
 
