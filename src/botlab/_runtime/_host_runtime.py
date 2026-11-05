@@ -625,6 +625,12 @@ class LocalRuntimeSession:
         return botlab_host.parameter(name)
 
     def _run_plan(self, max_control_steps):
+        import os
+        import time
+
+        loop_steps = round(float(os.environ.get("BOTLAB_LOOP_SECONDS", "0")) * self._control_hz)
+        loop_from_motion = loop_steps < 0
+        deadline = time.monotonic()
         self.reset_for_run()
         last_action = None
 
@@ -635,6 +641,16 @@ class LocalRuntimeSession:
             )
             self._broadcast_display(frame)
             step_index += 1
+            if self._display is not None and loop_steps:
+                deadline += 1.0 / self._control_hz
+                time.sleep(max(0.0, deadline - time.monotonic()))
+            if loop_from_motion and self._active_step_limit:
+                loop_steps = self._active_step_limit
+            if loop_steps > 0 and step_index >= loop_steps:
+                self.reset_for_run()
+                last_action = None
+                step_index = 0
+                print("[botlab] loop reset", flush=True)
             if self.completed or self._physics.should_stop():
                 break
         return step_index

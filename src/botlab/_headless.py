@@ -94,13 +94,87 @@ class HeadlessRun:
 
         botlab_host.project_state().set_parameter(name, value)
 
+    def set_command(self, node_id, values) -> None:
+        """Inject a discrete command value from the next control step on.
+
+        The browser's CLI/AI command channel, headless: a mapped ``commands``
+        node (no parameter axis — the mappings' values are the value set)
+        receives ``values`` wholesale, overriding held key mappings, until the
+        matching :meth:`clear_command` or the next ``set_command``. Values are
+        checked against the node's mapping codes plus its resting code, like
+        ``set_parameter`` range-checks a slider.
+        """
+        from botlab._runtime._observations import set_injected_command
+
+        node = self._command_node(node_id)
+        if len(tuple(values)) != len(node["parameterNames"]):
+            raise ValueError(
+                f"[botlab] Command {node_id!r} expects {len(node['parameterNames'])} "
+                f"value(s), got {len(tuple(values))}"
+            )
+        legal = [tuple(node["rest"])] + [tuple(code) for code in node["codes"]]
+        if tuple(float(value) for value in values) not in legal:
+            codes = ", ".join(
+                "/".join(str(int(item)) if float(item).is_integer() else str(item)
+                         for item in code)
+                for code in node["codes"]
+            )
+            expected = f"the resting code or one of {codes}" if codes else "the resting code"
+            raise ValueError(
+                f"[botlab] Command {node_id!r} value must be {expected}"
+            )
+        set_injected_command(node_id, values)
+
+    def clear_command(self, node_id) -> None:
+        """Drop one node's injection; the command falls back to its resting code."""
+        from botlab._runtime._observations import clear_injected_commands
+
+        self._command_node(node_id)
+        clear_injected_commands(node_id)
+
+    def _command_node(self, node_id) -> dict:
+        """Validate one mapped commands node from the live plan and describe it."""
+        if self.session._executor is None:
+            raise RuntimeError(
+                "[botlab] command injection needs a compiled policy plan; this "
+                "project runs a custom controller"
+            )
+        node_id = str(node_id)
+        known = []
+        for binding in self.session._executor.observation_bindings:
+            data = binding.get("data") or {}
+            if binding["type"] != "obs-commands" or data.get("commandEncoding") != "mapped":
+                continue
+            known.append(binding["nodeId"])
+            if binding["nodeId"] != node_id:
+                continue
+            names = [
+                name for name in (data.get("parameterNames") or [])
+                if isinstance(name, str)
+            ]
+            rest = [float(item) for item in (data.get("cmdMin") or [0.0])[: len(names)]]
+            if len(rest) != len(names):
+                rest = [0.0] * len(names)
+            codes = [
+                [float(item) for item in (mapping.get("values") or [])]
+                for mapping in (data.get("commandMappings") or [])
+                if isinstance(mapping, dict)
+            ]
+            return {"parameterNames": names, "rest": rest, "codes": codes}
+        known_text = ", ".join(known) or "(none declared)"
+        raise ValueError(
+            f"[botlab] Command node {node_id!r} is not a mapped commands node "
+            f"of this project: {known_text}"
+        )
+
     # -- driving ------------------------------------------------------------
 
     def reset(self) -> None:
         """Reset like the runner does before its first step.
 
         Called automatically before the first :meth:`step` when skipped;
-        call it directly to re-run a rollout (parameters overrides survive).
+        call it directly to re-run a rollout. Parameter overrides and command
+        injections survive, like a browser refresh keeps slider positions.
         """
         self.session.reset_for_run()
         self._step_index = 0

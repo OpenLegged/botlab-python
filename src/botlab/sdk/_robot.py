@@ -160,6 +160,15 @@ class Robot:
         return self._calibration("effortLimit")
 
     @property
+    def imu_extrinsic(self):
+        """IMU-to-body mounting rotation, wxyz; preset ``imuExtrinsic``.
+
+        IMU readings arrive in the mounted frame; ``rotate(reading, imu_extrinsic)``
+        expresses them in the body frame the policy was trained on.
+        """
+        return self._calibration("imuExtrinsic")
+
+    @property
     def default_angles(self):
         return _ResourceValues(
             default_joint_positions(self.id),
@@ -449,20 +458,53 @@ class Robot:
         self,
         *parameter_names,
         parameters=None,
-        waypoint=None,
-        input_mode="static",
+        keyboard=None,
+        gamepad=None,
+        magnitude=None,
         ramp_rate=None,
-        keys=None,
-        bindings=None,
-        mappings=None,
+        waypoint=None,
+        rest=None,
     ):
         """Command vector read from project parameters, one axis per name.
 
-        Axis limits come from each parameter's `range` in project(), so they
-        are declared once rather than restated here. A ramp_rate of zero
-        disables smoothing and applies interactive input immediately. The
-        names may also arrive as one ``parameters=[...]`` sequence -- the form
-        a ``commands(**read_config("config/io.yaml")["..."])`` call site needs.
+        The vector is declared once, here in code -- it is the policy-side
+        contract. Axis limits come from each parameter's `range` in project(),
+        so they are declared once rather than restated here. ``keyboard=`` and
+        ``gamepad=`` carry the devices' pure binding tables, the sections a
+        ``config/keyboard.yaml`` / ``config/gamepad.yaml`` file provides:
+
+        ``keyboard={"bindings": {axis: {increase, decrease}}}`` or
+        ``{"mappings": [{key, value, label}]}``; ``gamepad={"bindings": {axis:
+        {stick, axis, invert}}}``, ``{"mappings": [{button, value, label}]}``
+        or ``deadzone``. Binding axes are parameter names (or axis indices)
+        of this vector; neither device section declares the vector, so the
+        two files never mirror each other. ``commandMode`` derives from which
+        devices carry axis bindings (keyboard / gamepad / keyboard-gamepad).
+        A ``ramp_rate`` of zero disables smoothing and applies interactive
+        input immediately.
+
+        When a device section carries ``mappings`` the call takes no parameter
+        axes: the mappings' ``value`` / ``values`` ARE the command's value set
+        -- a discrete mode command is a control quantity, not a tunable
+        parameter, so it never appears in project() or the parameter panel.
+        All mappings (both devices) must share one width; ``rest=`` gives the
+        resting code the vector returns while no trigger is held (a number,
+        a sequence matching the width, or the default zero).
+
+        An axis may also be a finite number instead of a parameter name: a
+        constant axis pinned to that value. It keeps the policy's trained
+        command layout (e.g. a ``(forward, lateral, yaw)`` policy driven with
+        lateral fixed at zero takes ``("forward_velocity", 0, "yaw_rate")``)
+        without declaring a dead parameter for it; the plan carries it as an
+        empty-string axis name. Constant axes clamp keys, sticks, and touch
+        to the constant, and need the named axes' parameter ranges so the
+        plan emits one bounds vector.
+
+        ``magnitude=[names]`` marks axes as magnitude axes: they rest at zero
+        and interactive inputs (keys, gamepad stick, touch) command plus or
+        minus the parameter's current value instead of ramping between the
+        range endpoints. The slider then sets the speed a key press commands,
+        not a cruise speed.
         """
         if parameters is not None:
             if parameter_names:
@@ -471,23 +513,100 @@ class Robot:
                 )
             if not isinstance(parameters, (list, tuple)) or not parameters:
                 raise ValueError(
-                    "commands parameters must be a non-empty sequence of parameter names"
+                    "commands parameters must be a non-empty sequence of parameter names "
+                    "or axis constants"
                 )
             parameter_names = parameters
-        names = [
-            _non_empty_string(name, f"command parameter {index}")
-            for index, name in enumerate(parameter_names)
-        ]
-        if not names:
-            raise ValueError("commands requires at least one parameter name")
-        allowed_modes = ("static", "keyboard", "gamepad", "keyboard-gamepad")
-        if input_mode not in allowed_modes:
-            raise ValueError(f"commands input_mode must be one of {allowed_modes}")
+        keyboard_section = _command_device_section(keyboard, "keyboard", {"bindings", "mappings"})
+        gamepad_section = _command_device_section(
+            gamepad, "gamepad", {"bindings", "mappings", "deadzone"}
+        )
+        has_keyboard_mappings = keyboard_section is not None and "mappings" in keyboard_section
+        has_gamepad_mappings = gamepad_section is not None and "mappings" in gamepad_section
+        has_mappings = has_keyboard_mappings or has_gamepad_mappings
+        # 事件映射自带值域：映射值就是合法值集，轴不占参数，rest 是静息码。
+        if parameter_names and has_mappings:
+            raise ValueError(
+                "commands mappings own their value domain; declare no parameter axes "
+                "alongside them"
+            )
+        if rest is not None and (parameter_names or not has_mappings):
+            raise ValueError(
+                "commands rest declares the mappings form's resting code; it takes no "
+                "parameter axes and requires mappings"
+            )
+        mapped = []
+        if has_keyboard_mappings:
+            mapped.extend(_mapped_command_data(keyboard_section["mappings"], "keyboard"))
+        if has_gamepad_mappings:
+            mapped.extend(_mapped_command_data(gamepad_section["mappings"], "gamepad"))
+        mapped_dim = None
+        if mapped:
+            widths = {len(entry["values"]) for entry in mapped}
+            if len(widths) != 1:
+                raise ValueError("commands mappings must share one width across their values")
+            mapped_dim = widths.pop()
+        if parameter_names:
+            axes = [
+                _command_axis(item, f"command axis {index}")
+                for index, item in enumerate(parameter_names)
+            ]
+        elif mapped_dim is not None:
+            axes = [(None, value) for value in _mapped_rest(rest, mapped_dim)]
+        else:
+            raise ValueError("commands requires parameter axes or device mappings")
+        # 常量轴在 plan 里占一个空串名：参数名禁止空串，跨 Python/JS/JSON 形态唯一。
+        names = [name if name is not None else "" for name, _constant in axes]
+        constant_axes = [index for index, (_name, constant) in enumerate(axes) if constant is not None]
+        has_constants = bool(constant_axes)
+        if gamepad_section is not None and "deadzone" in gamepad_section and "bindings" not in gamepad_section:
+            raise ValueError("commands gamepad deadzone requires bindings (mappings read no sticks)")
+        # commandMode 由设备绑定推出：只有带轴绑定的设备算连续输入源（keyboard /
+        # gamepad / keyboard-gamepad）；纯事件映射不改模式，向量保持 static。
+        has_keyboard_axes = keyboard_section is not None and "bindings" in keyboard_section
+        has_gamepad_axes = gamepad_section is not None and "bindings" in gamepad_section
+        if has_keyboard_axes and has_gamepad_axes:
+            input_mode = "keyboard-gamepad"
+        elif has_keyboard_axes:
+            input_mode = "keyboard"
+        elif has_gamepad_axes:
+            input_mode = "gamepad"
+        else:
+            input_mode = "static"
+        bounds = []
+        for name, constant in axes:
+            if constant is not None:
+                bounds.append((constant, constant))
+                continue
+            host_range = botlab_host.parameterRange(name)
+            bounds.append(_host_value(host_range) if host_range is not None else None)
         data = {
             "dim": len(names),
             "parameterNames": names,
             "commandMode": input_mode,
         }
+        if keyboard_section is not None and "bindings" in keyboard_section:
+            data["commandBindings"] = _keyboard_bindings_data(
+                keyboard_section["bindings"], names, constant_axes, bounds,
+                "commands keyboard.bindings",
+            )
+        if gamepad_section is not None and "bindings" in gamepad_section:
+            data["gamepadBindings"] = _gamepad_bindings_data(
+                gamepad_section["bindings"], names, constant_axes, bounds,
+                "commands gamepad.bindings",
+            )
+        if gamepad_section is not None and "deadzone" in gamepad_section:
+            deadzone = gamepad_section["deadzone"]
+            if isinstance(deadzone, bool) or not isinstance(deadzone, (int, float)) or not 0 <= deadzone < 1:
+                raise ValueError("commands gamepad deadzone must be a number in [0, 1)")
+            data["gamepadDeadzone"] = float(deadzone)
+        if has_mappings:
+            if waypoint is not None:
+                raise ValueError("commands mappings cannot be combined with waypoint tracking")
+            if magnitude is not None:
+                raise ValueError("commands mappings cannot be combined with magnitude axes")
+            data["commandEncoding"] = "mapped"
+            data["commandMappings"] = mapped
         if ramp_rate is not None:
             ramp_rate = _finite_number(ramp_rate, "commands ramp_rate")
             if ramp_rate < 0:
@@ -498,164 +617,261 @@ class Robot:
                     "keyboard-gamepad input_mode"
                 )
             data["rampRate"] = ramp_rate
-        ranges = [botlab_host.parameterRange(name) for name in names]
-        bounds = [_host_value(item) for item in ranges]
+        if has_constants:
+            missing = [name for (name, _constant), bound in zip(axes, bounds) if bound is None]
+            if missing:
+                raise ValueError(
+                    "commands constant axes need the named axes' parameter ranges to emit "
+                    f"one bounds vector; missing ranges: {missing}"
+                )
         if all(bound is not None for bound in bounds):
             data["cmdMin"] = [float(low) for low, _high in bounds]
             data["cmdMax"] = [float(high) for _low, high in bounds]
-        configured_inputs = sum(
-            value is not None for value in (keys, bindings, mappings)
-        )
-        if configured_inputs > 1:
-            raise ValueError("commands accepts only one of keys, bindings, or mappings")
-        if keys is not None:
-            if not isinstance(keys, dict):
-                raise TypeError("commands keys must be a mapping")
-            key_fields = {
-                "forward": "keyForward",
-                "backward": "keyBackward",
-                "left": "keyLeft",
-                "right": "keyRight",
-                "yaw_left": "keyYawLeft",
-                "yaw_right": "keyYawRight",
-            }
-            unknown = set(keys) - set(key_fields)
+        if magnitude is not None:
+            if isinstance(magnitude, str) or not isinstance(magnitude, (list, tuple)) or not magnitude:
+                raise ValueError("commands magnitude must be a non-empty sequence of parameter names")
+            magnitude_names = [
+                _non_empty_string(name, f"commands magnitude[{index}]")
+                for index, name in enumerate(magnitude)
+            ]
+            unknown = [name for name in magnitude_names if name not in names]
             if unknown:
-                raise ValueError(f"commands keys has unknown fields {sorted(unknown)}")
-            for name, value in keys.items():
-                if value is None or value is False:
-                    data[key_fields[name]] = False
-                elif isinstance(value, str) and value:
-                    data[key_fields[name]] = value
-                else:
-                    raise ValueError(
-                        f"commands keys.{name} must be a non-empty string, None, or False"
-                    )
-        if bindings is not None:
-            if not isinstance(bindings, dict) or not bindings:
-                raise ValueError("commands bindings must be a non-empty mapping")
-            if input_mode not in ("keyboard", "keyboard-gamepad"):
                 raise ValueError(
-                    "commands bindings require keyboard or keyboard-gamepad input_mode"
+                    f"commands magnitude has unknown parameters {unknown}; the command axes are {names}"
                 )
-            if not all(bound is not None for bound in bounds):
-                missing = [name for name, bound in zip(names, bounds) if bound is None]
+            if len(set(magnitude_names)) != len(magnitude_names):
+                raise ValueError("commands magnitude has duplicate names")
+            if input_mode == "static":
                 raise ValueError(
-                    "commands interactive bindings require parameter ranges for "
-                    f"{missing}"
+                    "commands magnitude requires interactive input_mode "
+                    "(keyboard, gamepad, or keyboard-gamepad)"
                 )
-            normalized_bindings = {}
-            used_keys = set()
-            for raw_axis, binding in bindings.items():
-                if isinstance(raw_axis, int) and not isinstance(raw_axis, bool):
-                    if raw_axis < 0 or raw_axis >= len(names):
-                        raise ValueError(
-                            f"commands binding axis {raw_axis} is outside {len(names)} parameters"
-                        )
-                    axis = str(raw_axis)
-                elif isinstance(raw_axis, str) and raw_axis in names:
-                    axis = raw_axis
-                else:
-                    raise ValueError(
-                        "commands binding keys must be declared parameter names or axis indices"
-                    )
-                if not isinstance(binding, dict) or not binding:
-                    raise ValueError(f"commands binding {raw_axis!r} must be a non-empty mapping")
-                unknown = set(binding) - {"increase", "decrease"}
-                if unknown:
-                    raise ValueError(
-                        f"commands binding {raw_axis!r} has unknown fields {sorted(unknown)}"
-                    )
-                normalized = {}
-                for direction in ("increase", "decrease"):
-                    if direction not in binding:
-                        continue
-                    key = binding[direction]
-                    if key is None or key is False:
-                        normalized[direction] = False
-                    elif isinstance(key, str) and key:
-                        if key in used_keys:
-                            raise ValueError(f'commands binding key "{key}" is duplicated')
-                        used_keys.add(key)
-                        normalized[direction] = key
-                    else:
-                        raise ValueError(
-                            f"commands binding {raw_axis!r}.{direction} must be a "
-                            "non-empty string, None, or False"
-                        )
-                if not normalized:
-                    raise ValueError(
-                        f"commands binding {raw_axis!r} requires increase or decrease"
-                    )
-                if not any(key is not False for key in normalized.values()):
-                    raise ValueError(
-                        f"commands binding {raw_axis!r} requires an enabled key"
-                    )
-                normalized_bindings[axis] = normalized
-            data["commandBindings"] = normalized_bindings
-        if mappings is not None:
-            if input_mode != "static":
-                raise ValueError("commands mappings require input_mode='static'")
-            if waypoint is not None:
-                raise ValueError("commands mappings cannot be combined with waypoint tracking")
-            if not isinstance(mappings, (list, tuple)) or not mappings:
-                raise ValueError("commands mappings must be a non-empty sequence")
-            normalized_mappings = []
-            used_chords = set()
-            for index, mapping in enumerate(mappings):
-                label = f"commands mappings[{index}]"
-                if not isinstance(mapping, dict):
-                    raise TypeError(f"{label} must be a mapping")
-                unknown = set(mapping) - {"key", "keys", "value", "values", "label"}
-                if unknown:
-                    raise ValueError(f"{label} has unknown fields {sorted(unknown)}")
-                if ("key" in mapping) == ("keys" in mapping):
-                    raise ValueError(f"{label} requires exactly one of key or keys")
-                if "key" in mapping:
-                    key = _non_empty_string(mapping["key"], f"{label} key")
-                    chord = (key,)
-                    key_data = {"key": key}
-                else:
-                    raw_keys = mapping["keys"]
-                    if not isinstance(raw_keys, (list, tuple)) or not raw_keys:
-                        raise ValueError(f"{label} keys must be a non-empty sequence")
-                    chord = tuple(
-                        _non_empty_string(key, f"{label} keys[{key_index}]")
-                        for key_index, key in enumerate(raw_keys)
-                    )
-                    if len(set(chord)) != len(chord):
-                        raise ValueError(f"{label} keys must be unique")
-                    key_data = {"keys": list(chord)}
-                chord_key = tuple(sorted(chord))
-                if chord_key in used_chords:
-                    raise ValueError(f"{label} duplicates an earlier key chord")
-                used_chords.add(chord_key)
-
-                if ("value" in mapping) == ("values" in mapping):
-                    raise ValueError(f"{label} requires exactly one of value or values")
-                if "value" in mapping:
-                    if len(names) != 1:
-                        raise ValueError(f"{label} value requires a one-dimensional command")
-                    values = _finite_values([mapping["value"]], f"{label} value")
-                else:
-                    values = require_vector(mapping["values"], len(names), f"{label} values")
-                for axis, value in enumerate(values):
-                    bound = bounds[axis]
-                    if bound is not None and not (float(bound[0]) <= value <= float(bound[1])):
-                        raise ValueError(
-                            f"{label} value {value} is outside parameter {names[axis]!r} range"
-                        )
-                normalized = {**key_data, "values": values}
-                if "label" in mapping:
-                    normalized["label"] = _localized_text(mapping["label"], f"{label} label")
-                normalized_mappings.append(normalized)
-            data["commandEncoding"] = "mapped"
-            data["commandMappings"] = normalized_mappings
+            magnitude_set = set(magnitude_names)
+            data["magnitude"] = [name in magnitude_set for name in names]
         if waypoint is not None:
             if not isinstance(waypoint, dict):
                 raise TypeError("commands waypoint must come from waypoint_tracking()")
+            if has_constants:
+                raise ValueError("commands waypoint cannot combine with constant axes")
             data.update(waypoint)
         return Signal("obs-commands", "commands", data)
+
+
+def _command_axis(item, label):
+    """One command axis: a parameter name string, or a finite number pinning a
+    constant axis (``commands("vx", 0, "yaw")`` -- the policy's command layout
+    slot stays without a declared parameter)."""
+    if isinstance(item, str):
+        return _non_empty_string(item, label), None
+    if isinstance(item, (int, float)) and not isinstance(item, bool):
+        value = _finite_number(item, label)
+        return None, value
+    raise ValueError(f"{label} must be a parameter name or a finite constant")
+
+
+def _axis_list_for_error(axes):
+    """Axis list for error messages: names as-is, constants as their value."""
+    items = {name if name is not None else constant for name, constant in axes}
+    return sorted(items, key=repr)
+
+
+# 手柄按钮：Gamepad API standard mapping 的规范名（plan 契约层，与具体策略无关）。
+_GAMEPAD_BUTTONS = frozenset({
+    "A", "B", "X", "Y", "LB", "RB", "LT", "RT",
+    "Back", "Start", "LStick", "RStick",
+    "DPadUp", "DPadDown", "DPadLeft", "DPadRight",
+})
+
+
+def _command_device_section(section, device, allowed):
+    """Validate one device binding table (``keyboard=`` / ``gamepad=``).
+
+    A section is a pure binding table: exactly one of ``bindings`` (continuous
+    axes) or ``mappings`` (discrete events); the command vector itself never
+    appears here.
+    """
+    if section is None:
+        return None
+    if not isinstance(section, dict):
+        raise TypeError(f"commands {device} must be a mapping (a config/{device}.yaml section)")
+    unknown = set(section) - allowed
+    if unknown:
+        raise ValueError(f"commands {device} has unknown fields {sorted(unknown)}")
+    declared = [field for field in ("bindings", "mappings") if field in section]
+    if len(declared) != 1:
+        raise ValueError(f"commands {device} requires exactly one of bindings or mappings")
+    return section
+
+
+def _resolve_command_axis(raw_axis, names, constant_axes, label):
+    """Binding-table axis key: a declared parameter name or an axis index."""
+    if isinstance(raw_axis, int) and not isinstance(raw_axis, bool):
+        if raw_axis < 0 or raw_axis >= len(names):
+            raise ValueError(
+                f"{label} axis {raw_axis} is outside {len(names)} parameters"
+            )
+        if raw_axis in constant_axes:
+            raise ValueError(f"{label} axis {raw_axis} is a constant axis and takes no bindings")
+        return str(raw_axis)
+    if isinstance(raw_axis, str) and raw_axis in names:
+        return raw_axis
+    raise ValueError(f"{label} keys must be declared parameter names or axis indices")
+
+
+def _keyboard_bindings_data(bindings, names, constant_axes, bounds, label):
+    """Keyboard binding table: ``{axis: {increase: KeyW, decrease: KeyS}}``."""
+    if not isinstance(bindings, dict) or not bindings:
+        raise ValueError(f"{label} must be a non-empty mapping")
+    if not all(bound is not None for bound in bounds):
+        missing = [name for name, bound in zip(names, bounds) if bound is None]
+        raise ValueError(f"{label} require parameter ranges for {missing}")
+    normalized_bindings = {}
+    used_keys = set()
+    for raw_axis, binding in bindings.items():
+        axis = _resolve_command_axis(raw_axis, names, constant_axes, label)
+        if not isinstance(binding, dict) or not binding:
+            raise ValueError(f"{label} {raw_axis!r} must be a non-empty mapping")
+        unknown = set(binding) - {"increase", "decrease"}
+        if unknown:
+            raise ValueError(f"{label} {raw_axis!r} has unknown fields {sorted(unknown)}")
+        normalized = {}
+        for direction in ("increase", "decrease"):
+            if direction not in binding:
+                continue
+            key = binding[direction]
+            if key is None or key is False:
+                normalized[direction] = False
+            elif isinstance(key, str) and key:
+                if key in used_keys:
+                    raise ValueError(f'{label} key "{key}" is duplicated')
+                used_keys.add(key)
+                normalized[direction] = key
+            else:
+                raise ValueError(
+                    f"{label} {raw_axis!r}.{direction} must be a non-empty string, None, or False"
+                )
+        if not normalized:
+            raise ValueError(f"{label} {raw_axis!r} requires increase or decrease")
+        if not any(key is not False for key in normalized.values()):
+            raise ValueError(f"{label} {raw_axis!r} requires an enabled key")
+        normalized_bindings[axis] = normalized
+    return normalized_bindings
+
+
+def _gamepad_bindings_data(bindings, names, constant_axes, bounds, label):
+    """Gamepad binding table: ``{axis: {stick: L|R, axis: 0|1, invert: bool}}``.
+
+    Each stick slot (stick, axis) drives at most one command axis -- two axes
+    reading the same slot would fight over one physical input. Stick axes
+    interpolate between the axis bounds, so the vector needs every parameter
+    range (same requirement as keyboard bindings).
+    """
+    if not isinstance(bindings, dict) or not bindings:
+        raise ValueError(f"{label} must be a non-empty mapping")
+    if not all(bound is not None for bound in bounds):
+        missing = [name for name, bound in zip(names, bounds) if bound is None]
+        raise ValueError(f"{label} require parameter ranges for {missing}")
+    normalized_bindings = {}
+    used_slots = {}
+    for raw_axis, binding in bindings.items():
+        axis = _resolve_command_axis(raw_axis, names, constant_axes, label)
+        if not isinstance(binding, dict) or not binding:
+            raise ValueError(f"{label} {raw_axis!r} must be a non-empty mapping")
+        unknown = set(binding) - {"stick", "axis", "invert"}
+        if unknown:
+            raise ValueError(f"{label} {raw_axis!r} has unknown fields {sorted(unknown)}")
+        stick = binding.get("stick")
+        stick_axis = binding.get("axis")
+        if stick not in ("L", "R"):
+            raise ValueError(f"{label} {raw_axis!r}.stick must be L or R")
+        if isinstance(stick_axis, bool) or not isinstance(stick_axis, int) or stick_axis not in (0, 1):
+            raise ValueError(f"{label} {raw_axis!r}.axis must be 0 or 1")
+        slot = (stick, stick_axis)
+        if slot in used_slots:
+            raise ValueError(
+                f"{label} stick {stick}{stick_axis} is already bound to "
+                f"{used_slots[slot]!r}"
+            )
+        used_slots[slot] = raw_axis
+        invert = binding.get("invert", True)
+        if not isinstance(invert, bool):
+            raise ValueError(f"{label} {raw_axis!r}.invert must be a bool")
+        normalized_bindings[axis] = {"stick": stick, "axis": stick_axis, "invert": invert}
+    return normalized_bindings
+
+
+def _mapped_command_data(mappings, device):
+    """Event mappings: keyboard chords or gamepad buttons carrying the command's value set."""
+    if not isinstance(mappings, (list, tuple)) or not mappings:
+        raise ValueError(f"commands {device}.mappings must be a non-empty sequence")
+    allowed = {"key", "keys"} if device == "keyboard" else {"button"}
+    normalized_mappings = []
+    used_triggers = set()
+    for index, mapping in enumerate(mappings):
+        label = f"commands {device}.mappings[{index}]"
+        if not isinstance(mapping, dict):
+            raise TypeError(f"{label} must be a mapping")
+        unknown = set(mapping) - (allowed | {"value", "values", "label"})
+        if unknown:
+            raise ValueError(f"{label} has unknown fields {sorted(unknown)}")
+        if device == "keyboard":
+            if ("key" in mapping) == ("keys" in mapping):
+                raise ValueError(f"{label} requires exactly one of key or keys")
+            if "key" in mapping:
+                key = _non_empty_string(mapping["key"], f"{label} key")
+                trigger_data = {"key": key}
+                trigger = (key,)
+            else:
+                raw_keys = mapping["keys"]
+                if not isinstance(raw_keys, (list, tuple)) or not raw_keys:
+                    raise ValueError(f"{label} keys must be a non-empty sequence")
+                chord = tuple(
+                    _non_empty_string(key, f"{label} keys[{key_index}]")
+                    for key_index, key in enumerate(raw_keys)
+                )
+                if len(set(chord)) != len(chord):
+                    raise ValueError(f"{label} keys must be unique")
+                trigger_data = {"keys": list(chord)}
+                trigger = chord
+            trigger_key = tuple(sorted(trigger))
+        else:
+            button = _non_empty_string(mapping.get("button"), f"{label} button")
+            if button not in _GAMEPAD_BUTTONS:
+                raise ValueError(
+                    f"{label} button must be one of {sorted(_GAMEPAD_BUTTONS)}"
+                )
+            trigger_data = {"button": button}
+            trigger_key = (button,)
+        if trigger_key in used_triggers:
+            raise ValueError(f"{label} duplicates an earlier trigger")
+        used_triggers.add(trigger_key)
+
+        if ("value" in mapping) == ("values" in mapping):
+            raise ValueError(f"{label} requires exactly one of value or values")
+        if "value" in mapping:
+            values = _finite_values([mapping["value"]], f"{label} value")
+        else:
+            values = _finite_values(mapping["values"], f"{label} values")
+        if not values:
+            raise ValueError(f"{label} values must not be empty")
+        normalized = {**trigger_data, "values": values}
+        if "label" in mapping:
+            normalized["label"] = _localized_text(mapping["label"], f"{label} label")
+        normalized_mappings.append(normalized)
+    return normalized_mappings
+
+
+def _mapped_rest(rest, dim):
+    """静息码：None 时全 0；标量只许一维；序列必须与命令同宽。"""
+    if rest is None:
+        return [0.0] * dim
+    if isinstance(rest, (int, float)) and not isinstance(rest, bool):
+        if dim != 1:
+            raise ValueError("commands rest scalar requires a one-dimensional command")
+        return [_finite_number(rest, "commands rest")]
+    if isinstance(rest, (list, tuple)):
+        return require_vector(rest, dim, "commands rest")
+    raise ValueError("commands rest must be a number or a sequence of numbers")
 
 
 def _with_imu_sensors(data, imu_sensors):

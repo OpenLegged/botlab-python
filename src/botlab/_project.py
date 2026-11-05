@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import importlib
 import json
+import os
 import re
 import sys
 import threading
@@ -167,10 +168,11 @@ def _preset_lookup(project_dir: Path):
         if preset_id in cache:
             return cache[preset_id]
         if preset_id.endswith(PRESET_FILE_SUFFIX):
-            if "/" in preset_id:
+            # Project-relative like the browser host's os.path.join(directory,
+            # name): config/*.preset.yaml works, escapes do not.
+            if os.path.isabs(preset_id) or ".." in preset_id.replace("\\", "/").split("/"):
                 raise BotLabError(
-                    f'BotLab resource preset "{preset_id}" must be a flat '
-                    f'"<name>{PRESET_FILE_SUFFIX}" file next to controller.py.'
+                    f'BotLab resource preset "{preset_id}" must stay inside the project directory.'
                 )
             preset_path = project_dir / preset_id
             if not preset_path.is_file():

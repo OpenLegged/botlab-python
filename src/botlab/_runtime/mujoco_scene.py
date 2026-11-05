@@ -42,6 +42,9 @@ def _flat_numbers(value, label):
     array = np.asarray(value)
     if array.dtype.kind not in "biuf":
         raise TypeError(f"[display] {label} is not a numeric MuJoCo array")
+    # The viewer wire format accepts numbers, not JSON booleans.
+    if array.dtype.kind == "b":
+        array = array.astype(np.uint8)
     return array.reshape(-1).tolist()
 
 

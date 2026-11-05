@@ -168,8 +168,7 @@ def test_read_config_feeds_every_declaration_chain(project_dir):
     )
     (config / "parameters.yaml").write_text(
         "forward_velocity: {default: 0.0, range: [-0.5, 0.5]}\n"
-        "yaw_rate: {default: 0.0, range: [-1, 1]}\n"
-        "policy_command: {default: 0, range: [0, 4]}\n",
+        "yaw_rate: {default: 0.0, range: [-1, 1]}\n",
         encoding="utf-8",
     )
     (config / "observation.yaml").write_text(
@@ -182,14 +181,15 @@ def test_read_config_feeds_every_declaration_chain(project_dir):
     (config / "io.yaml").write_text(
         "mode_command:\n"
         "  parameters: [forward_velocity, yaw_rate]\n"
-        "  input_mode: keyboard\n",
+        "  keyboard:\n"
+        "    bindings:\n"
+        "      forward_velocity: {increase: KeyW, decrease: KeyS}\n",
         encoding="utf-8",
     )
     (config / "control.yaml").write_text(
         "state_node: state-machine\n"
         "vx: forward_velocity\n"
         "yaw_rate: yaw_rate\n"
-        "event: policy_command\n"
         "motion_states: [0]\n"
         'states: {"0": WALK}\n'
         "actions:\n"

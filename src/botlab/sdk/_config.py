@@ -14,6 +14,10 @@ pinned against it by a dual-end fixture corpus: block mappings and sequences,
 flow collections, quoted scalars, block scalars, comments and blank lines.
 Anchors, aliases, tags, merge keys, directives, multiple documents, non-string
 mapping keys and non-finite numbers are rejected instead of interpreted.
+
+A config file may carry one reserved top-level entry, ``_label``: the human
+display name the workspace tree shows for the file. :func:`read_config`
+validates and strips it, so declaration data never sees it.
 """
 
 import math
@@ -24,6 +28,8 @@ import botlab_host
 __all__ = ["read_config"]
 
 _CONFIG_DIRECTORY = "config"
+_DISPLAY_LABEL_KEY = "_label"
+_LABEL_LOCALES = frozenset({"en", "zh"})
 _MAX_SAFE_INTEGER = 2 ** 53 - 1
 
 _NULL_TOKENS = frozenset({"", "~", "null", "Null", "NULL"})
@@ -66,12 +72,45 @@ def read_config(path):
     numbers, booleans, null) so it flows straight into ``project()``,
     resource constructors and ``control_profile``. Anything the restricted
     parser does not accept raises ``ValueError`` naming the file and line.
+
+    A top-level ``_label`` entry names the file for humans (the workspace
+    tree shows it instead of the filename). It is display metadata, never
+    declaration data, so it is stripped here — ``**read_config(...)`` whole-
+    mapping unpacks stay valid with a ``_label`` present.
     """
     source = _config_path(path)
     text = botlab_host.read_project_file(source)
     if not isinstance(text, str):
         raise ValueError(f'read_config("{source}") needs the file text from the host')
-    return _parse_restricted_yaml(source, text)
+    return _strip_display_label(source, _parse_restricted_yaml(source, text))
+
+
+def _strip_display_label(path, document):
+    """Pop the reserved ``_label`` display name; malformed values hard-fail.
+
+    The accepted forms mirror parameter labels: a non-empty string, or a
+    ``{"en": ..., "zh": ...}`` table with ``en`` required. The value is
+    discarded here — only the host-side tree reads it, straight from the file.
+    """
+    if not isinstance(document, dict) or _DISPLAY_LABEL_KEY not in document:
+        return document
+    label = document.pop(_DISPLAY_LABEL_KEY)
+    valid = (
+        isinstance(label, str) and label.strip()
+        or isinstance(label, dict)
+        and set(label) <= _LABEL_LOCALES
+        and "en" in label
+        and all(
+            isinstance(value, str) and value.strip() for value in label.values()
+        )
+    )
+    if not valid:
+        raise ValueError(
+            f"{path}: _label must be a non-empty string or a "
+            'mapping like {"en": "Runtime", "zh": "运行时"} with "en" required; '
+            "it is display metadata and never reaches project code"
+        )
+    return document
 
 
 # ---------------------------------------------------------------------------

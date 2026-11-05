@@ -44,6 +44,7 @@ from ._modes import (
     state_machine,
 )
 from ._motion import motion_reference
+from ._observe import observe
 from ._policy import policy_bank, policy_inputs
 from ._resources import Model, Motion, Scene, Sensor
 from ._robot import Robot, waypoint_tracking
@@ -126,6 +127,7 @@ __all__ = [
     "noise",
     "norm",
     "normalize",
+    "observe",
     "one_hot",
     "one_hot_index",
     "phase_clock",

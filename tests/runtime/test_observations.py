@@ -1647,6 +1647,44 @@ class FillObservationTest(unittest.TestCase):
         )
         np.testing.assert_allclose(processor.output_buffers[0], [0.3, -0.2], atol=1e-7)
 
+    def test_obs_commands_pins_constant_axes_from_cmd_min(self):
+        processor = obs.ObservationProcessor()
+        processor.init({"dim": 3}, [])
+        # 空串轴名 = 常量轴：值取 cmdMin 的恒等对，不查参数。
+        data = {
+            "parameterNames": ["forward", "", "yaw"],
+            "dim": 3,
+            "cmdMin": [-0.5, 0.0, -1.0],
+            "cmdMax": [0.5, 0.0, 1.0],
+        }
+        target = binding("cmd-node", "obs-commands", data, processor)
+        parameters = {"forward": 0.3, "yaw": -0.4}
+        obs.fill_observation(
+            target,
+            self.runtime_context(parameters=lambda name: parameters[name]),
+        )
+        np.testing.assert_allclose(
+            processor.output_buffers[0], [0.3, 0.0, -0.4], atol=1e-7
+        )
+
+    def test_obs_commands_constant_axes_require_cmd_min(self):
+        processor = obs.ObservationProcessor()
+        processor.init({"dim": 1}, [])
+        target = binding(
+            "cmd-node",
+            "obs-commands",
+            {"parameterNames": [""], "dim": 1},
+            processor,
+        )
+        with self.assertRaises(ValueError) as ctx:
+            obs.fill_observation(
+                target, self.runtime_context(parameters=lambda name: 0.0)
+            )
+        self.assertIn(
+            "obs-commands constant axes require a cmdMin vector matching dim",
+            str(ctx.exception),
+        )
+
     def test_obs_commands_requires_parameter_names(self):
         target = binding("cmd-node", "obs-commands", {"dim": 2})
         with self.assertRaises(ValueError) as ctx:
@@ -1654,7 +1692,7 @@ class FillObservationTest(unittest.TestCase):
                 target, self.runtime_context(parameters=lambda name: 0.0)
             )
         self.assertIn(
-            "obs-commands parameterNames must be a non-empty string list", str(ctx.exception)
+            "obs-commands parameterNames must be a string list", str(ctx.exception)
         )
 
     def test_last_action_flows_to_obs_actions(self):

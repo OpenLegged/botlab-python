@@ -272,6 +272,9 @@ f 3 1 4
         data.qvel[0] = 1
         mujoco.mj_forward(model, data)
         provider = MujocoSceneProvider(model, data, mujoco, "Light")
+        shadow = json.loads(provider.payload)["model"]["light_castshadow"]
+        self.assertEqual(shadow, [1])
+        self.assertTrue(all(type(value) is int for value in shadow))
         mujoco.mj_step(model, data)
         stale_lights = data.light_xpos.copy()
         values = np.frombuffer(provider.frame(data.time), dtype="<f4")

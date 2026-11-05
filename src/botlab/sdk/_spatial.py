@@ -1,7 +1,8 @@
 """Quaternion and spatial math, as plain values or as Signal expressions."""
 import math
 
-from ._signal import Signal, _numeric_signal
+from ._declaration import _plan_reference
+from ._signal import Signal, _numeric_signal, constant
 from ._vectors import require_vector
 
 
@@ -13,7 +14,15 @@ def quaternion_yaw(quaternion):
     )
 
 
+def _quaternion_signal(quaternion):
+    """Preset-backed quaternions fold as constants; width 4 is known (wxyz)."""
+    if not isinstance(quaternion, Signal) and _plan_reference(quaternion) is not None:
+        return constant(quaternion, size=4)
+    return quaternion
+
+
 def inverse_rotate(vector, quaternion):
+    quaternion = _quaternion_signal(quaternion)
     if isinstance(vector, Signal) or isinstance(quaternion, Signal):
         return _spatial("quat_rotate_inverse", quaternion, vector)
     vx, vy, vz = require_vector(vector, 3, "vector")
@@ -52,7 +61,7 @@ def _spatial(operation, *values):
 
 def rotate(vector, quaternion):
     """Rotate xyz vectors by wxyz quaternions; singleton batches broadcast."""
-    return _spatial("quat_rotate", quaternion, vector)
+    return _spatial("quat_rotate", _quaternion_signal(quaternion), vector)
 
 
 def quaternion_multiply(left, right):

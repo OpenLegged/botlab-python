@@ -81,6 +81,71 @@ def _pendulum_project(directory: Path, model_bytes: bytes) -> Path:
     return directory
 
 
+# The mappings form: a discrete command is a control quantity, not a parameter —
+# no parameter axis, the mappings' values (1, 2) are the value set, rest is 0.
+MAPPED_CONTROLLER = CONTROLLER.replace(
+    'parameters={"gain": {"default": 1.0, "range": [0.0, 2.0]}}',
+    'parameters={}',
+).replace(
+    'observation = concat([robot.commands("gain")])',
+    'observation = concat([robot.commands(keyboard={"mappings": [\n'
+    '        {"key": "KeyX", "value": 1},\n'
+    '        {"key": "KeyZ", "value": 2},\n'
+    '    ]})])',
+)
+
+
+@pytest.fixture()
+def mapped_pendulum_project(tmp_path: Path) -> Path:
+    directory = tmp_path / "mapped"
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "controller.py").write_text(MAPPED_CONTROLLER, encoding="utf-8")
+    (directory / "main.py").write_text(MAIN, encoding="utf-8")
+    (directory / "robot.xml").write_text(PENDULUM_MJCF, encoding="utf-8")
+    (directory / "policy.onnx").write_bytes(IDENTITY_ONNX)
+    return directory
+
+
+def test_set_command_injects_a_mapped_value_until_cleared(mapped_pendulum_project: Path):
+    with open_headless(mapped_pendulum_project) as run:
+        # No injection: the commands node rests at its resting code (0).
+        assert float(run.step().action[0]) == 0.0
+
+        # The browser's CLI/AI command channel, headless: the injected value
+        # covers the node output from the next control step on.
+        run.set_command("commands", [1])
+        assert float(run.step().action[0]) == 1.0
+        run.set_command("commands", [2])
+        assert float(run.step().action[0]) == 2.0
+
+        run.clear_command("commands")
+        assert float(run.step().action[0]) == 0.0
+
+        # Values are code-checked like set_parameter range-checks a slider.
+        with pytest.raises(ValueError, match="must be the resting code or one of 1, 2"):
+            run.set_command("commands", [7])
+        with pytest.raises(ValueError, match="expects 1 value"):
+            run.set_command("commands", [1, 2])
+        with pytest.raises(ValueError, match="not a mapped commands node"):
+            run.set_command("heading", [1])
+
+
+def test_command_injection_survives_reset_like_parameter_overrides(
+    mapped_pendulum_project: Path,
+):
+    with open_headless(mapped_pendulum_project) as run:
+        # Before the first step, the auto-reset inside step() must not eat the
+        # injection — parameter overrides survive reset, and so do commands.
+        run.set_command("commands", [2])
+        assert float(run.step().action[0]) == 2.0
+
+        run.reset()
+        assert float(run.step().action[0]) == 2.0
+
+        run.clear_command("commands")
+        assert float(run.step().action[0]) == 0.0
+
+
 @pytest.fixture()
 def pendulum_project(tmp_path: Path) -> Path:
     return _pendulum_project(tmp_path, IDENTITY_ONNX)

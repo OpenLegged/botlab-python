@@ -189,11 +189,16 @@ def project(name, *, control_hz=None, physics_hz=None, parameters=None):
 # compiled plan before uploading a control descriptor to a middleware.
 # ---------------------------------------------------------------------------
 
-_CONTROL_SCHEMA = "botlab.control.profile.v1"
+_CONTROL_SCHEMA = "botlab.control.profile.v3"
 _CONTROL_NAME = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 _CONTROL_CAPABILITY = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$")
 _CONTROL_RESERVED_CAPABILITIES = ("motion.twist", "control.stop")
 _CONTROL_EXPERIENCE_LIMIT = 32768
+# Per-kind command time budgets are project-declarable, but the platform hard
+# caps are a protocol invariant mirrored here so an over-budget declaration
+# fails at declaration time, not on first command. Keep in sync with
+# CONTROL_BUDGET_CAPS_MS in src/domain/controls/controlDescriptor.ts.
+_CONTROL_BUDGET_CAPS_MS = {"move_ms": 60_000, "event_ms": 300_000, "task_ms": 600_000}
 _CANONICAL_DECIMAL_STATE_KEY = re.compile(r"^(0|[1-9][0-9]*)$")
 
 
@@ -225,7 +230,7 @@ def _control_state_codes(value, label):
     return codes
 
 
-def action(name, event_value, *, allowed_states, target_states, capability=None, idempotent=False):
+def action(name, event_value, *, allowed_states, target_states, capability=None, idempotent=False, task=False):
     """Declare one named action for a :func:`control_profile`.
 
     ``name`` is the CLI alias an AI assistant calls. ``event_value`` must be one
@@ -233,7 +238,9 @@ def action(name, event_value, *, allowed_states, target_states, capability=None,
     ``allowed_states`` are the policy states the action may start from and
     ``target_states`` the steady states it reaches -- declared explicitly, never
     derived from the state machine's transitions. ``capability`` defaults to
-    ``action.<name>``.
+    ``action.<name>``. ``task=True`` marks the action as carrying a
+    natural-language task payload (the CLI ``task`` command), which the runtime
+    enforces against these declared values.
     """
     return _normalize_action(
         {
@@ -243,12 +250,13 @@ def action(name, event_value, *, allowed_states, target_states, capability=None,
             "target_states": target_states,
             "capability": capability,
             "idempotent": idempotent,
+            "task": task,
         },
         "control action",
     )
 
 
-_ACTION_FIELDS = ("name", "event_value", "allowed_states", "target_states", "capability", "idempotent")
+_ACTION_FIELDS = ("name", "event_value", "allowed_states", "target_states", "capability", "idempotent", "task")
 
 
 def _normalize_action(item, label):
@@ -283,6 +291,9 @@ def _normalize_action(item, label):
     idempotent = item.get("idempotent", False)
     if not isinstance(idempotent, bool):
         raise TypeError(f'{label} "{name}" idempotent must be a boolean')
+    task = item.get("task", False)
+    if not isinstance(task, bool):
+        raise TypeError(f'{label} "{name}" task must be a boolean')
     return {
         "name": name,
         "event_value": event_value,
@@ -294,6 +305,7 @@ def _normalize_action(item, label):
         ),
         "capability": resolved_capability,
         "idempotent": idempotent,
+        "task": task,
     }
 
 
@@ -307,26 +319,95 @@ def _control_state_node(value):
     return _non_empty_string(value, "control_profile state_node")
 
 
+_CONTROL_FEEDBACK_CHANNELS = (
+    "policy_observation",
+    "position",
+    "orientation",
+    "base_velocity",
+    "joint_positions",
+)
+
+
+def _control_feedback(value):
+    """Normalize the AI observation face: the state-frame channels a
+    non-privileged external controller may read.
+
+    ``None`` (no feedback block in config/control.yaml) closes every channel:
+    privileged ground truth is opt-in per project. The full five-channel mapping
+    is always returned so re-declaration equality stays stable.
+    """
+    if value is None:
+        return {channel: False for channel in _CONTROL_FEEDBACK_CHANNELS}
+    if not isinstance(value, dict):
+        raise TypeError("control_profile feedback must be a mapping of channel to boolean")
+    unknown = set(value) - set(_CONTROL_FEEDBACK_CHANNELS)
+    if unknown:
+        raise ValueError(f"control_profile feedback has unknown fields {sorted(unknown)}")
+    feedback = {}
+    for channel in _CONTROL_FEEDBACK_CHANNELS:
+        enabled = value.get(channel, False)
+        if not isinstance(enabled, bool):
+            raise TypeError(f"control_profile feedback {channel} must be a boolean")
+        feedback[channel] = enabled
+    return feedback
+
+
+def _control_budgets(value):
+    """Normalize the v2 command time budgets: per-kind ceilings the runtime
+    enforces on move duration and event/task waits.
+
+    Only explicitly declared slots survive (undeclared kinds fall back to the
+    platform defaults at descriptor build), and every value is checked against
+    the platform hard caps -- the caps themselves are a protocol invariant, not
+    a project knob.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise TypeError("control_profile budgets must be a mapping of budget to milliseconds")
+    unknown = set(value) - set(_CONTROL_BUDGET_CAPS_MS)
+    if unknown:
+        raise ValueError(f"control_profile budgets has unknown fields {sorted(unknown)}")
+    budgets = {}
+    for slot, cap in _CONTROL_BUDGET_CAPS_MS.items():
+        declared = value.get(slot)
+        if declared is None:
+            continue
+        if isinstance(declared, bool) or not isinstance(declared, int) or declared <= 0 or declared > cap:
+            raise ValueError(f"control_profile budgets {slot} must be an integer in (0, {cap}]")
+        budgets[slot] = declared
+    return budgets or None
+
+
 def control_profile(
     robot,
     *,
     state_node,
-    vx,
-    yaw_rate,
-    event,
+    vx=None,
+    yaw_rate=None,
     actions=(),
     motion_states=None,
     states=None,
     experience=None,
+    feedback=None,
+    budgets=None,
 ):
     """Declare the external CLI-control face of the project.
 
     ``robot`` is a ``Robot(...)`` handle, ``state_node`` the plan node id of the
-    ``state_machine(...)`` driving the policy modes, and ``vx`` / ``yaw_rate`` /
-    ``event`` the project parameter names of the motion axes and the command
-    event. Pass the result to :func:`declare_control`; the browser page
-    cross-checks it against the compiled plan before pairing with a
-    ``botlab control serve`` middleware.
+    ``state_machine(...)`` driving the policy modes. The event source is
+    structural: the state machine's command input is the mapped commands node,
+    and each action's ``event_value`` is one of its mapping codes. ``vx`` /
+    ``yaw_rate`` name the motion axes; omitting both declares a motionless
+    control face (no ``move`` primitive). ``feedback`` declares the AI
+    observation face: the state-frame channels a non-privileged controller may
+    read (``policy_observation`` taps the policy input vector; ``position`` /
+    ``orientation`` / ``base_velocity`` are world-frame ground truth;
+    ``joint_positions`` is the robot's joint position span), all closed when
+    omitted. ``budgets`` optionally tightens the per-kind command time budgets
+    within the platform caps. Pass the result to :func:`declare_control`; the
+    browser page cross-checks it against the compiled plan before pairing with
+    a ``botlab control serve`` middleware.
     """
     items = list(actions) if isinstance(actions, (list, tuple)) else None
     if not items:
@@ -371,21 +452,31 @@ def control_profile(
                 f"control_profile experience exceeds {_CONTROL_EXPERIENCE_LIMIT} bytes"
             )
 
-    axis_vx = _non_empty_string(vx, "control_profile vx")
-    axis_yaw = _non_empty_string(yaw_rate, "control_profile yaw_rate")
-    event_parameter = _non_empty_string(event, "control_profile event")
-    if len({axis_vx, axis_yaw, event_parameter}) != 3:
-        raise ValueError("control_profile vx, yaw_rate and event must be distinct parameters")
+    # v3: vx / yaw_rate 声明运动轴，二者必须成对出现；都省略 = 无运动轴的
+    # 控制面（move 原语不存在），此时 motion_states 无从谈起。
+    if (vx is None) != (yaw_rate is None):
+        raise ValueError("control_profile vx and yaw_rate must be declared together")
+    if vx is None:
+        if motion_states_codes is not None:
+            raise ValueError("control_profile motion_states requires the motion axes (vx, yaw_rate)")
+        motion_parameters = None
+    else:
+        axis_vx = _non_empty_string(vx, "control_profile vx")
+        axis_yaw = _non_empty_string(yaw_rate, "control_profile yaw_rate")
+        if axis_vx == axis_yaw:
+            raise ValueError("control_profile vx and yaw_rate must be distinct parameters")
+        motion_parameters = {"vx": axis_vx, "yaw_rate": axis_yaw}
 
     return {
         "schema": _CONTROL_SCHEMA,
         "robot": _resource_source(robot, "control_profile robot"),
         "state_node": _control_state_node(state_node),
-        "motion_parameters": {"vx": axis_vx, "yaw_rate": axis_yaw},
-        "event_parameter": event_parameter,
+        "motion_parameters": motion_parameters,
         "motion_states": motion_states_codes,
         "states": state_names,
         "experience": experience,
+        "feedback": _control_feedback(feedback),
+        "budgets": _control_budgets(budgets),
         "actions": declared_actions,
     }
 
@@ -399,9 +490,9 @@ def _control_profile_value(control):
 def declare_control(control):
     """Attach a :func:`control_profile` to the project declaration.
 
-    Call it after ``project()``: the profile's motion and event axes must be
-    declared parameters, and the browser page only pairs a project whose
-    declaration matches its compiled plan.
+    Call it after ``project()``: the profile's motion axes must be declared
+    parameters, and the browser page only pairs a project whose declaration
+    matches its compiled plan.
     """
     botlab_host.declareProjectControl(
         _plan_value(_control_profile_value(control), "project control"),

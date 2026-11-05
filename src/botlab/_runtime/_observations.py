@@ -1404,10 +1404,23 @@ def _local_command_mapping_active(mapping, label):
         return False
     if any_keys and not any(key in pressed for key in any_keys):
         return False
+    # 手柄按钮触发器（gamepad.yaml 的 mappings）：本地输入状态没有手柄，
+    # 未按下的按钮映射不激活——与浏览器侧 commandMappingActive 同一 gate。
+    button = mapping.get("button")
+    if isinstance(button, str) and button:
+        if button not in _LOCAL_COMMAND_INPUT_STATE["pressed_buttons"]:
+            return False
     return True
 
 
-def _mapped_command_vector(config, output, context):
+def _mapped_command_vector(config, output, context, node_id=None):
+    # CLI/AI 命令注入优先于实体按键/手柄映射（浏览器侧 runtimeIoCommands 的
+    # 本地镜像）：注入向量整段覆盖，清回静息码由注入方负责。
+    if node_id is not None:
+        injected = _LOCAL_COMMAND_INPUT_STATE["injected_commands"].get(node_id)
+        if injected is not None:
+            output[:] = vector_from(injected, len(output), "injected command values")
+            return output
     raw_mappings = _first_present(config, ("commandMappings", "commandMap", "mappings"))
     if raw_mappings is None or raw_mappings == "":
         return output
@@ -1462,11 +1475,37 @@ _pose_velocity_state_by_node = {}
 # but no keyboard/gamepad is attached to it. Keeping this as explicit state is
 # important: an inactive key gate means "try the next mapping / keep the
 # declared default", not "ignore a feature the runtime failed to implement".
+# ``injected_commands`` carries the discrete command injection (node id ->
+# values): the headless counterpart of the browser's CLI/AI command channel.
 _LOCAL_COMMAND_INPUT_STATE = {
     "pressed_keys": frozenset(),
     "pressed_buttons": frozenset(),
     "axis_active": False,
+    "injected_commands": {},
 }
+
+
+def set_injected_command(node_id, values):
+    """Inject one mapped commands node's value from the next control step on.
+
+    Mirrors the browser's ``runtimeIoCommands``: the injected vector covers the
+    whole node output (overriding held key mappings) until
+    :func:`clear_injected_commands` or the matching ``set_injected_command``
+    call replaces it. ``HeadlessRun.set_command`` range-checks the values
+    against the node's mapping codes before calling this.
+    """
+    _LOCAL_COMMAND_INPUT_STATE["injected_commands"][str(node_id)] = tuple(
+        float(value) for value in values
+    )
+
+
+def clear_injected_commands(node_id=None):
+    """Drop one node's injection, or all of them (``reset`` semantics: the
+    commands fall back to their resting codes)."""
+    if node_id is None:
+        _LOCAL_COMMAND_INPUT_STATE["injected_commands"].clear()
+    else:
+        _LOCAL_COMMAND_INPUT_STATE["injected_commands"].pop(str(node_id), None)
 
 
 def clear_pose_velocity_states(node_id=None):
@@ -1626,7 +1665,7 @@ def _command_vector(config, node_id, context):
         "one-hot",
         "mapped",
     ):
-        return _mapped_command_vector(config, output, context)
+        return _mapped_command_vector(config, output, context, node_id)
     return _pose_velocity_command_vector(config, node_id, output, context)
 
 
@@ -2702,23 +2741,23 @@ def _positive_integer(value, label):
     return int(number)
 
 
-def _string_list(raw, label):
-    if not isinstance(raw, (list, tuple)) or any(
-        not isinstance(item, str) or not item for item in raw
-    ):
-        raise _error("botlab", f"{label} must be a non-empty string list")
-    return list(raw)
-
-
 def _write_command_parameters(node_data, context):
-    names = _string_list(node_data.get("parameterNames"), "obs-commands parameterNames")
-    values = node_data.get("values")
-    if not (
-        isinstance(values, np.ndarray)
-        and values.dtype == np.float32
-        and len(values) == len(names)
+    raw_names = node_data.get("parameterNames")
+    if not isinstance(raw_names, (list, tuple)) or any(
+        not isinstance(item, str) for item in raw_names
     ):
-        values = np.zeros(len(names), dtype=np.float32)
+        raise _error("botlab", "obs-commands parameterNames must be a string list")
+    names = list(raw_names)
+    # 常量轴（空串占位）：值取 cmdMin 的恒等对，不查参数。
+    cmd_min = None
+    if any(name == "" for name in names):
+        raw_min = node_data.get("cmdMin")
+        if not isinstance(raw_min, (list, tuple)) or len(raw_min) != len(names):
+            raise _error(
+                "botlab",
+                "obs-commands constant axes require a cmdMin vector matching dim",
+            )
+        cmd_min = [float(item) for item in raw_min]
     parameters = context.get("parameters")
     if not callable(parameters):
         raise _error(
@@ -2726,8 +2765,15 @@ def _write_command_parameters(node_data, context):
             "obs-commands requires a parameters callable (name -> float) in "
             "the observation context",
         )
+    values = node_data.get("values")
+    if not (
+        isinstance(values, np.ndarray)
+        and values.dtype == np.float32
+        and len(values) == len(names)
+    ):
+        values = np.zeros(len(names), dtype=np.float32)
     for index, name in enumerate(names):
-        values[index] = parameters(name)
+        values[index] = cmd_min[index] if name == "" else parameters(name)
     node_data["values"] = values
 
 
