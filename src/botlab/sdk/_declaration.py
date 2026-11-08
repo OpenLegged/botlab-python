@@ -7,6 +7,7 @@ import re
 import botlab_host
 
 from ._vectors import _expand_vector
+from ._panels import normalize_panels
 
 
 def _host_value(value):
@@ -195,7 +196,7 @@ def _respawn_binding(value):
     return binding
 
 
-def project(name, *, control_hz=None, physics_hz=None, parameters=None, respawn=None):
+def project(name, *, control_hz=None, physics_hz=None, parameters=None, respawn=None, panels=None):
     """Name the project and override the runtime defaults.
 
     Optional: a project that keeps the documented defaults (50 Hz control,
@@ -207,8 +208,13 @@ def project(name, *, control_hz=None, physics_hz=None, parameters=None, respawn=
     typically read from the ``respawn`` sections of ``config/keyboard.yaml``
     and ``config/gamepad.yaml``. Respawn is a project input, not a platform
     default: a project that declares none has no respawn key.
+
+    ``panels={"watch": read_config("config/watch.yaml"),
+    "metrics": read_config("config/metrics.yaml")}`` declares display metadata.
+    File paths have no special meaning. ``panels={}`` selects built-in defaults;
+    omitting panels preserves legacy project behavior.
     """
-    botlab_host.declareProject(
+    args = (
         name,
         control_hz,
         physics_hz,
@@ -216,6 +222,13 @@ def project(name, *, control_hz=None, physics_hz=None, parameters=None, respawn=
         None if respawn is None else _plan_value(_respawn_binding(respawn), "project respawn"),
         _declaration_location(),
     )
+    # Keep old projects compatible with hosts that predate explicit panels.
+    if panels is None:
+        botlab_host.declareProject(*args)
+    else:
+        result = botlab_host.declareProject(*args, normalize_panels(panels))
+        if result != "botlab.panels.v1":
+            raise RuntimeError("[botlab] This host does not support project(panels=...); update the BotLab runtime")
 
 
 # ---------------------------------------------------------------------------

@@ -147,6 +147,27 @@ project(
 )
 ```
 
+Declare Watch and Metrics panel settings through the same entry point:
+
+```python
+project(
+    "My Robot",
+    panels={
+        "watch": read_config("config/curves.yaml"),
+        "metrics": read_config("config/readouts.yaml"),
+    },
+)
+```
+
+The `watch` and `metrics` keys assign each file's role; filenames carry no
+special meaning. Panel data is validated at declaration time and preserved
+in the project manifest and release package. Native and headless runs retain
+that metadata without adding Python callbacks or changing the control plan.
+`panels={}` explicitly selects the built-in panel defaults. Omit `panels` to
+leave older project manifests unchanged; the browser editor retains its legacy
+fixed-filename behavior for those projects. Explicit declarations never merge
+with unused legacy files. Use a browser runtime that supports `project(panels=...)`.
+
 ## Commands
 
 | Command | Description |

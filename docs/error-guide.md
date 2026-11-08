@@ -12,6 +12,8 @@ CLI 的错误全部是硬失败：缺什么、哪条契约破了、字段名是�
 | `legacy browser format` | 存在非空 `botlab.yaml` | 改写为 Python 声明工程（YAML 是旧格式） |
 | `Resources can only be declared while a project is being applied` | main.py 阶段调用了 `Robot(...)` 等构造器 | 资源声明只能在 controller.py 模块顶层 |
 | `project() can only be called once` | 两个模块都调了 `project()` | 只在 controller.py 顶层调一次 |
+| `does not support project(panels=...)` | 浏览器运行时早于显式面板声明契约 | 安装支持该声明的 BotLab 浏览器运行时，并保持 SDK 与运行时配套 |
+| `project.panels` / 配置路径后跟 `invalid channel id`、`unknown key` | 面板字段或变量标识非法 | 按 `watch` / `metrics` 配置结构修正；变量使用显式 `telemetry:` / `runtime:` / `metric:` 等来源 |
 | `Unknown BotLab resource preset` | preset 名既不是文件也不是已知内置 | 检查 `*.preset.yaml` 文件名与 `preset=` 一致 |
 | `must be a flat "<name>.preset.yaml"` | preset 路径带目录 | preset 文件放工程根，扁平命名 |
 | `needs a positive integer actionDimension` | robot 无 preset 或 config 缺字段 | 补 preset：actionDimension/jointQposOffset/jointQvelOffset |

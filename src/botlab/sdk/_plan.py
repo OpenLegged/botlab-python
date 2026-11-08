@@ -1,5 +1,6 @@
 """Lowering a Signal expression into the compiled control plan."""
 from ._declaration import _plan_value
+from ._signal import Signal
 
 
 def _visit_signals(signal, seen, ordered):
@@ -23,11 +24,23 @@ def _unique_node_id(label, taken):
     return candidate
 
 
-def _control_plan(robot_id, sink, pd_signal=None, control_signal=None):
+def _control_plan(robot_id, sink, pd_signal=None, control_signal=None, metrics=None):
     if (pd_signal is None) == (control_signal is None):
         raise ValueError("control plan requires exactly one output signal")
+    if metrics is None:
+        metrics = {}
+    if not isinstance(metrics, dict):
+        raise TypeError("PolicyController metrics must be a mapping of names to scalar Signals")
+    for name, signal in metrics.items():
+        if not isinstance(name, str) or not name.strip() or name != name.strip():
+            raise ValueError("PolicyController metric names must be non-empty strings without surrounding whitespace")
+        if not isinstance(signal, Signal):
+            raise TypeError(f'PolicyController metric "{name}" must be a scalar Signal')
     ordered = []
-    _visit_signals(sink, set(), ordered)
+    seen = set()
+    _visit_signals(sink, seen, ordered)
+    for signal in metrics.values():
+        _visit_signals(signal, seen, ordered)
 
     hooks = [signal for signal in ordered if signal._type == "proc-action-hook"]
     if len(hooks) != 1:
@@ -85,4 +98,9 @@ def _control_plan(robot_id, sink, pd_signal=None, control_signal=None):
         "edges": edges,
         "output": output,
     }
+    if metrics:
+        plan["metrics"] = {
+            name: {"nodeId": node_ids[id(signal._node)], "outputSlot": signal._output_slot}
+            for name, signal in metrics.items()
+        }
     return plan, hooks[0]._modify
