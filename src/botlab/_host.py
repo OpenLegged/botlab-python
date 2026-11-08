@@ -653,8 +653,11 @@ def declareResource(kind, rid, source, preset, provider, config, location=None):
     _active().declare_resource(kind, rid, source, preset, provider, config)
 
 
-def declareProject(name, control_hz, physics_hz, parameters, location=None):  # noqa: N802
+def declareProject(name, control_hz, physics_hz, parameters, respawn=None, location=None):  # noqa: N802
     del location
+    # The respawn binding is a browser-interactive input (page key / gamepad
+    # button); the offline collector drops it like the control declaration.
+    del respawn
     _active().declare_project(name, control_hz, physics_hz, parameters)
 
 

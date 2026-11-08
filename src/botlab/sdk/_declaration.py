@@ -164,17 +164,56 @@ def _declare_resource(
     return resource_id
 
 
-def project(name, *, control_hz=None, physics_hz=None, parameters=None):
+def _respawn_binding(value):
+    """Validate a ``project(respawn=...)`` device binding mapping.
+
+    ``{"keyboard": {"key": "KeyR"}, "gamepad": {"button": "X"}}`` -- either
+    device may be omitted, unknown fields are rejected, and an empty mapping
+    is a declaration error.
+    """
+    if not isinstance(value, dict):
+        raise TypeError("project respawn must be a mapping")
+    unknown = [key for key in value if key not in ("keyboard", "gamepad")]
+    if unknown:
+        raise ValueError(f'project respawn has unknown key "{unknown[0]}" (only keyboard/gamepad)')
+    binding = {}
+    for device, field in (("keyboard", "key"), ("gamepad", "button")):
+        section = value.get(device)
+        if section is None:
+            continue
+        if not isinstance(section, dict) or list(section) != [field]:
+            raise ValueError(
+                f"project respawn.{device} must be a one-entry mapping "
+                f"{{{field!r}: '<code>'}}"
+            )
+        code = section[field]
+        if not isinstance(code, str) or not code.strip():
+            raise ValueError(f"project respawn.{device}.{field} must be a non-empty string")
+        binding[device] = {field: code}
+    if not binding:
+        raise ValueError("project respawn needs a keyboard key or a gamepad button")
+    return binding
+
+
+def project(name, *, control_hz=None, physics_hz=None, parameters=None, respawn=None):
     """Name the project and override the runtime defaults.
 
     Optional: a project that keeps the documented defaults (50 Hz control,
     200 Hz physics) and declares no tunable parameters never has to call this.
+
+    ``respawn`` declares the project's respawn input -- the key or gamepad
+    button that picks the robot back up where it fell, e.g.
+    ``respawn={"keyboard": {"key": "KeyR"}, "gamepad": {"button": "X"}}``,
+    typically read from the ``respawn`` sections of ``config/keyboard.yaml``
+    and ``config/gamepad.yaml``. Respawn is a project input, not a platform
+    default: a project that declares none has no respawn key.
     """
     botlab_host.declareProject(
         name,
         control_hz,
         physics_hz,
         _plan_value({} if parameters is None else parameters, "project parameters"),
+        None if respawn is None else _plan_value(_respawn_binding(respawn), "project respawn"),
         _declaration_location(),
     )
 

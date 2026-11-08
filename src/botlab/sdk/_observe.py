@@ -1,4 +1,4 @@
-"""Declarative observation order: expand config/observation.yaml's `order` section.
+"""Declarative observation order: expand a config file's `order` section.
 
 `observe()` is sugar over the same Signal primitives a handwritten controller
 calls -- `robot.<primitive>()`, `sensor.<read>()`, `concat`, `history` -- so an
@@ -130,7 +130,7 @@ def _build_history(source, spec, group_label):
 def observe(order, *, robot, sensors=None, io=None):
     """Build the observation signals named by an `order` spec.
 
-    `order` is the `order:` section of ``config/observation.yaml``: a mapping of
+    `order` is an `order:` section read from a project config file: a mapping of
     group name to group spec, and the group names are the returned keys.
 
     ```yaml
