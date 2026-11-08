@@ -65,6 +65,14 @@ def _config_path(path):
     return path
 
 
+class _ConfigMapping(dict):
+    """Plain mapping data with a source path for declaration error messages."""
+
+    def __init__(self, data, source_path):
+        super().__init__(data)
+        self._source_path = source_path
+
+
 def read_config(path):
     """Read one ``config/*.yaml`` declaration file as plain Python data.
 
@@ -82,7 +90,8 @@ def read_config(path):
     text = botlab_host.read_project_file(source)
     if not isinstance(text, str):
         raise ValueError(f'read_config("{source}") needs the file text from the host')
-    return _strip_display_label(source, _parse_restricted_yaml(source, text))
+    data = _strip_display_label(source, _parse_restricted_yaml(source, text))
+    return _ConfigMapping(data, source) if isinstance(data, dict) else data
 
 
 def _strip_display_label(path, document):

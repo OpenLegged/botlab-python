@@ -179,6 +179,20 @@ def test_headless_run_steps_and_records(pendulum_project: Path):
         botlab_host.observe("Robot")
 
 
+def test_headless_preserves_panels_without_changing_actions(pendulum_project: Path):
+    controller = pendulum_project / "controller.py"
+    controller.write_text(
+        controller.read_text(encoding="utf-8").replace(
+            'project("Headless Duck",',
+            'project("Headless Duck", panels={"watch": {"watch": ["qpos:0"]}},',
+        ),
+        encoding="utf-8",
+    )
+    with open_headless(pendulum_project) as run:
+        assert run.manifest["panels"]["watch"] == ["qpos:0"]
+        assert [float(record.action[0]) for record in run.steps(5)] == [1.0] * 5
+
+
 def test_set_parameter_takes_effect_from_the_next_step(pendulum_project: Path):
     with open_headless(pendulum_project) as run:
         first = run.step()

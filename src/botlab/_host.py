@@ -18,6 +18,7 @@ manifest produced here is the same shape the browser produces.
 from __future__ import annotations
 
 import math
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -131,6 +132,16 @@ def _json_value(value: Any, label: str, _stack: frozenset[int] = frozenset()) ->
     raise BotLabError(f"[botlab] {label} must be JSON-serializable")
 
 
+def validate_project_panels(value: Any) -> dict:
+    """Check resolved presentation metadata without modifying the input."""
+    from .sdk._panels import validate_resolved_panels
+
+    try:
+        return validate_resolved_panels(value)
+    except (TypeError, ValueError) as error:
+        raise BotLabError(str(error)) from error
+
+
 def _resource_source(value: Any, label: str) -> str:
     source = _text(value, label)
     if source.startswith("/") or "\\" in source or ".." in source.split("/"):
@@ -240,6 +251,7 @@ class HostSession:
         self._project_name: str | None = None
         self._control_hz: int | None = None
         self._physics_hz: int | None = None
+        self._panels: dict | None = None
         self._policy_controller_plan: dict | None = None
         self._plan_has_modifier = False
         self._declaration_closed = False
@@ -300,7 +312,7 @@ class HostSession:
         self._resources.append(resolved)
         self._resource_ids.add(rid)
 
-    def declare_project(self, name, control_hz, physics_hz, parameters):
+    def declare_project(self, name, control_hz, physics_hz, parameters, panels=None):
         if self._declaration_closed:
             raise BotLabError("[botlab] project() can only be called while a project is being applied")
         if self._project_name is not None:
@@ -321,6 +333,8 @@ class HostSession:
             raise BotLabError("[botlab] project parameters must be a mapping")
         for pid, value in parameters.items():
             self._parameters[pid] = _declared_parameter(pid, value)
+        if panels is not None:
+            self._panels = validate_project_panels(panels)
 
     def register_policy_controller(self, plan, modifier=None):
         self._policy_controller_plan = _json_value(plan, "policy controller plan")
@@ -515,6 +529,7 @@ class HostSession:
             "resources": [dict(item, config=dict(item["config"])) for item in self._resources],
             "parameters": {pid: dict(value) for pid, value in self._parameters.items()},
             "outputs": {"variables": [], "curves": []},
+            **({"panels": deepcopy(self._panels)} if self._panels is not None else {}),
         }
 
 
@@ -590,6 +605,7 @@ class _ProjectStateView:
             "physics_hz": session._physics_hz if session._physics_hz is not None else DEFAULT_PHYSICS_HZ,
             "parameters": {pid: dict(value) for pid, value in session._parameters.items()},
             "resources": [dict(item, config=dict(item["config"])) for item in session._resources],
+            **({"panels": deepcopy(session._panels)} if session._panels is not None else {}),
         }
 
     def resource(self, resource_id, kind=None):
@@ -653,12 +669,14 @@ def declareResource(kind, rid, source, preset, provider, config, location=None):
     _active().declare_resource(kind, rid, source, preset, provider, config)
 
 
-def declareProject(name, control_hz, physics_hz, parameters, respawn=None, location=None):  # noqa: N802
+def declareProject(name, control_hz, physics_hz, parameters, respawn=None, location=None, panels=None):  # noqa: N802
     del location
     # The respawn binding is a browser-interactive input (page key / gamepad
     # button); the offline collector drops it like the control declaration.
     del respawn
-    _active().declare_project(name, control_hz, physics_hz, parameters)
+    _active().declare_project(name, control_hz, physics_hz, parameters, panels)
+    if panels is not None:
+        return "botlab.panels.v1"
 
 
 def declareProjectControl(control, location=None):  # noqa: N802

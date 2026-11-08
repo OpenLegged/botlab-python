@@ -29,6 +29,8 @@ class PolicyController(Controller):
     Exactly one output is explicit: ``target`` enables BotLab position PD, while
     ``control`` writes native MuJoCo actuator controls directly. Both paths keep
     exactly one upstream ``Signal.action()`` as the previous-action/hook boundary.
+    ``metrics`` maps project-owned names to scalar Signals sampled by the native
+    browser runtime after each control step, without a Python callback.
     """
 
     def __init__(
@@ -42,6 +44,7 @@ class PolicyController(Controller):
         effort_limit=None,
         reset_on_change=None,
         end_after_steps=None,
+        metrics=None,
     ):
         if not isinstance(robot, Robot):
             raise TypeError("PolicyController robot must be a BotLab Robot")
@@ -60,6 +63,7 @@ class PolicyController(Controller):
                 robot.id,
                 sink,
                 control_signal=control,
+                metrics=metrics,
             )
         else:
             target = _as_signal(target, "PolicyController target")
@@ -113,7 +117,7 @@ class PolicyController(Controller):
                 ),
             )
             sink = Signal("out-mujoco", "controller", {}, (pd,))
-            self._plan_data, self.modify_action = _control_plan(robot.id, sink, pd)
+            self._plan_data, self.modify_action = _control_plan(robot.id, sink, pd, metrics=metrics)
 
         if reset_on_change is not None:
             from ._resources import Motion

@@ -202,6 +202,10 @@ def create_release_package(
     """
     if compression not in ("deflate", "stored"):
         raise BotLabError(f"release compression must be 'deflate' or 'stored', got {compression!r}")
+    if "panels" in project.manifest:
+        from ._host import validate_project_panels
+
+        validate_project_panels(project.manifest["panels"])
     compiled = None
     if project.compiled_plan is not None:
         from ._project import compiled_controller_envelope

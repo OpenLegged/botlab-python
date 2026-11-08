@@ -12,10 +12,16 @@
 | `Sensor(robot, *, preset=None, config=None, name=None)` | — | 深度相机等传感器，挂在 robot 上 |
 | `Motion(source, *, config=None, name=None)` | — | motion 参考数据 |
 | `Scene(source, *, preset=None, config=None, name=None)` | — | 场景（含程序化 heightfield） |
-| `project(name, *, control_hz=50, physics_hz=200, parameters=None)` | `parameters` 见下 | 工程声明；缺省频率 50/200 |
+| `project(name, *, control_hz=50, physics_hz=200, parameters=None, panels=None)` | `parameters`、`panels` 见下 | 工程声明；缺省频率 50/200 |
 
 `project(parameters=...)` 每项：`{"label", "default", "range": [min, max], "step", "unit"}`，
 `default` 必填且有限，`range` 内必须含 `default`，`step > 0`。
+
+`project(panels={"watch": read_config("config/curves.yaml"),
+"metrics": read_config("config/readouts.yaml")})` 显式接入监控和指标展示配置；文件名可改，
+用途由 `watch` / `metrics` 键决定。声明在编译时校验并写入 manifest，不改变控制 plan。
+`panels={}` 使用面板默认配置，省略时保留旧工程行为；不把旧固定文件隐式合并进显式声明。
+原生无头运行保留展示元数据，指标数值仍由控制器或运行时产出。
 
 ## 观测信号（从 robot/sensor 取，维度自动）
 
