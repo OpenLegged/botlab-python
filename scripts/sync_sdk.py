@@ -5,9 +5,7 @@ The ``botlab`` package BotLab serves in the browser
 (``src/domain/python/botlab/`` in the BotLab repository) is vendored verbatim
 as this distribution's ``sdk`` subpackage. Only the flat browser SDK modules
 are mirrored; the native ``botlab._runtime`` is owned by this repository and
-must never be copied from BotLab. The generated built-in preset data module
-(``src/domain/python/botlab_presets.py``) is copied alongside as
-``src/botlab/_presets.py``. Re-sync after BotLab-side changes:
+must never be copied from BotLab. Re-sync after BotLab-side changes:
 
     python scripts/sync_sdk.py --botlab ../BotLab
 
@@ -25,9 +23,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PACKAGE_SUBDIR = Path("src/domain/python/botlab")
-PRESETS_SOURCE = PACKAGE_SUBDIR.parent / "botlab_presets.py"
 TARGET_DIR = REPO_ROOT / "src" / "botlab" / "sdk"
-PRESETS_TARGET = REPO_ROOT / "src" / "botlab" / "_presets.py"
 
 
 def fail(message: str) -> int:
@@ -46,16 +42,10 @@ def main() -> int:
 
     source_root = Path(args.botlab).expanduser().resolve()
     source = source_root / PACKAGE_SUBDIR
-    presets_source = source_root / PRESETS_SOURCE
     if not (source / "__init__.py").is_file():
         return fail(
             f"{source} is not the BotLab python package (missing __init__.py); "
             "pass --botlab <BotLab checkout>"
-        )
-    if not presets_source.is_file():
-        return fail(
-            f"{presets_source} is missing; run `npm run export:presets` in the "
-            "BotLab checkout first"
         )
 
     files = sorted(source.glob("*.py"))
@@ -84,9 +74,7 @@ def main() -> int:
     for path in files:
         shutil.copy2(path, TARGET_DIR / path.name)
 
-    shutil.copy2(presets_source, PRESETS_TARGET)
     print(f"synced {len(files)} SDK modules: {source} -> {TARGET_DIR}")
-    print(f"synced preset data: {presets_source} -> {PRESETS_TARGET}")
     return 0
 
 

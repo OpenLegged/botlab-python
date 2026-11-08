@@ -15,8 +15,6 @@ SYNTHETIC_PACKAGE = {
     # read_config 解析器是镜像面的一部分：CLI 工程读 config/*.yaml 靠它。
     "src/domain/python/botlab/_config.py": "# config reader\n",
 }
-PRESETS_MODULE = 'PRESETS = {"g1": {"kind": "robot", "config": {}}}\n'
-
 
 @pytest.fixture()
 def upstream(tmp_path: Path) -> Path:
@@ -24,9 +22,6 @@ def upstream(tmp_path: Path) -> Path:
         path = tmp_path / "BotLab" / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="utf-8")
-    (tmp_path / "BotLab" / "src/domain/python/botlab_presets.py").write_text(
-        PRESETS_MODULE, encoding="utf-8"
-    )
     return tmp_path / "BotLab"
 
 
@@ -57,7 +52,7 @@ def dist_root(tmp_path: Path) -> Path:
     return root
 
 
-def test_mirror_carries_only_flat_sdk_and_presets_verbatim(upstream, dist_root):
+def test_mirror_carries_only_flat_sdk_verbatim(upstream, dist_root):
     assert run_sync(upstream, dist_root) == 0
 
     sdk = dist_root / "src" / "botlab" / "sdk"
@@ -68,9 +63,7 @@ def test_mirror_carries_only_flat_sdk_and_presets_verbatim(upstream, dist_root):
     assert (dist_root / "src" / "botlab" / "_runtime" / "run.py").read_text(
         encoding="utf-8"
     ) == "# independent native runner\n"
-    assert (
-        dist_root / "src" / "botlab" / "_presets.py"
-    ).read_text(encoding="utf-8") == PRESETS_MODULE
+    assert not (dist_root / "src" / "botlab" / "_presets.py").exists()
 
 
 def test_mirror_wipes_stale_modules(upstream, dist_root):
@@ -87,10 +80,6 @@ def test_mirror_wipes_stale_modules(upstream, dist_root):
         encoding="utf-8"
     ) == "# independent native runner\n"
 
-
-def test_missing_presets_module_fails(upstream, dist_root):
-    (upstream / "src/domain/python/botlab_presets.py").unlink()
-    assert run_sync(upstream, dist_root) == 1
 
 
 def test_unexpected_entries_still_rejected(upstream, dist_root):

@@ -26,7 +26,6 @@ import yaml
 
 from . import _host
 from ._host import PRESET_FILE_SUFFIX, BotLabError
-from ._presets import PRESETS
 
 STANDARD_PYTHON_MAIN = (
     "from botlab import Simulation\n"
@@ -182,13 +181,9 @@ def _preset_lookup(project_dir: Path):
             kind, config = _parse_preset_file(preset_path)
             entry = (kind, _host._json_value(config, f"preset {preset_id}"), True)
         else:
-            built_in = PRESETS.get(preset_id)
-            if built_in is None:
-                return None
-            entry = (
-                built_in["kind"],
-                _host._json_value(built_in.get("config", {}), f"preset {preset_id}"),
-                True,
+            raise BotLabError(
+                f'resource preset "{preset_id}" must be a project-local '
+                f"{PRESET_FILE_SUFFIX} file"
             )
         cache[preset_id] = entry
         return entry

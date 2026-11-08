@@ -220,8 +220,8 @@ BOTLAB_STEPS=500 botlab run my-robot-project --headless
 - Robot/scene sources resolve against the project directory first, then the
   shared assets root (`../..`), so BotLab templates that reference
   `models/...` trees run as-is.
-- Projects using built-in resource presets (e.g. `g1-hiking-robot`) work: the
-  registry is vendored as `botlab/_presets.py` and resolved offline.
+- Resource presets are project-local `*.preset.yaml` files (the built-in
+  named-preset registry was removed; see `docs/local-python-runtime.md`).
 - Headless depth/RGB cameras need a working EGL driver: start with
   `MUJOCO_GL=egl`. GPU inference needs `onnxruntime-gpu` matching your local
   CUDA/cuDNN; CPU works out of the box.
@@ -364,9 +364,7 @@ Release wheels already include the display frontend. Only commands that
 execute or export a browser simulation acquire the separate runtime.
 
 `src/botlab/sdk/` mirrors only the flat Python SDK modules from BotLab's
-`src/domain/python/botlab/`. The generated built-in preset registry
-(`botlab_presets.py` upstream) is mirrored as `src/botlab/_presets.py`.
-Re-sync those files after BotLab-side SDK changes with
+`src/domain/python/botlab/`. Re-sync after BotLab-side SDK changes with
 `python scripts/sync_sdk.py --botlab <BotLab checkout>`; the script rejects
 unexpected upstream subdirectories. The native runner and its tests are
 maintained in this repository under `src/botlab/_runtime/` and `tests/`;
