@@ -496,9 +496,9 @@ class Robot:
         command layout (e.g. a ``(forward, lateral, yaw)`` policy driven with
         lateral fixed at zero takes ``("forward_velocity", 0, "yaw_rate")``)
         without declaring a dead parameter for it; the plan carries it as an
-        empty-string axis name. Constant axes clamp keys, sticks, and touch
-        to the constant, and need the named axes' parameter ranges so the
-        plan emits one bounds vector.
+        empty-string axis name. Constant axes clamp keys, sticks, touch, and
+        waypoint tracking to the constant, and need the named axes' parameter
+        ranges so the plan emits one bounds vector.
 
         ``magnitude=[names]`` marks axes as magnitude axes: they rest at zero
         and interactive inputs (keys, gamepad stick, touch) command plus or
@@ -651,8 +651,8 @@ class Robot:
         if waypoint is not None:
             if not isinstance(waypoint, dict):
                 raise TypeError("commands waypoint must come from waypoint_tracking()")
-            if has_constants:
-                raise ValueError("commands waypoint cannot combine with constant axes")
+            # 常量轴与 waypoint 兼容：跟踪器按 cmdMin/cmdMax 钉住该轴（如横移恒
+            # 0 的航点巡航策略），布局槽位照样不占参数。
             data.update(waypoint)
         return Signal("obs-commands", "commands", data)
 

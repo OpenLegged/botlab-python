@@ -1638,6 +1638,81 @@ def _pose_velocity_command_vector(config, node_id, output, context):
     return output
 
 
+def _magnitude_axis_flags(config, dim):
+    """``commandMagnitudeFlags`` (keyboardCommands.ts) 的本地镜像。
+
+    ``None`` 表示无幅值轴（巡航语义：静息 = 参数值）。
+    """
+    raw = config.get("magnitude")
+    if raw is None or raw == "":
+        return None
+    flags = list(raw)
+    if len(flags) != dim or not all(isinstance(flag, bool) for flag in flags):
+        raise _error(
+            "mujocoObservations",
+            "magnitude must be a boolean list matching the command dim",
+        )
+    return flags
+
+
+def _magnitude_binding_index(key, config, dim, names):
+    """``commandBindingIndex`` (keyboardCommands.ts)：数字串是索引，否则查参数名。"""
+    if isinstance(key, bool):
+        raise _error("mujocoObservations", f"commandBindings has invalid axis {key!r}")
+    if isinstance(key, (int, float)) or (
+        isinstance(key, str) and key.isdigit() and (key == "0" or not key.startswith("0"))
+    ):
+        index = int(key)
+        if index >= dim:
+            raise _error(
+                "mujocoObservations",
+                f"commandBindings axis {index} is outside dim {dim}",
+            )
+        return index
+    try:
+        return names.index(key)
+    except ValueError:
+        raise _error(
+            "mujocoObservations", f'commandBindings has unknown parameter "{key}"'
+        ) from None
+
+
+def _apply_magnitude_axes(config, output, flags):
+    """幅值轴：静息 0，increase/decrease 目标 ±参数当前值（夹在轴区间）。
+
+    镜像 ``magnitudeAxisTarget`` + ``keyboardCommandVector`` 的无绑定幅值轴
+    归零（keyboardCommands.ts）：本地无摇杆，摇杆侧本就归 0；斜坡推进是
+    浏览器输入平滑，物理回归直接取目标值。
+    """
+    pressed = _LOCAL_COMMAND_INPUT_STATE["pressed_keys"]
+    names = list(config.get("parameterNames") or ())
+    minimum = config.get("cmdMin")
+    maximum = config.get("cmdMax")
+    bound = set()
+    bindings = config.get("commandBindings")
+    if isinstance(bindings, dict):
+        for key, rule in bindings.items():
+            if not isinstance(rule, dict):
+                continue
+            index = _magnitude_binding_index(key, config, len(output), names)
+            bound.add(index)
+            if not flags[index]:
+                continue
+            increase = rule.get("increase")
+            decrease = rule.get("decrease")
+            positive = isinstance(increase, str) and increase in pressed
+            negative = isinstance(decrease, str) and decrease in pressed
+            if positive != negative:
+                target = float(output[index]) if positive else -float(output[index])
+                output[index] = _clamp(target, minimum[index], maximum[index])
+            else:
+                output[index] = 0.0
+    for index, flag in enumerate(flags):
+        if flag and index not in bound:
+            # 无键盘绑定的幅值轴（只接摇杆）也按幅值语义静息在 0。
+            output[index] = 0.0
+
+
 def _command_vector(config, node_id, context):
     config = config or {}
     command_mode = config.get("commandMode")
@@ -1647,12 +1722,6 @@ def _command_vector(config, node_id, context):
         "keyboard-gamepad-buttons",
     ):
         return np.zeros(1, dtype=np.float32)
-    if command_mode in _INTERACTIVE_COMMAND_MODES:
-        # Explicit native-host input state is neutral. The declared project
-        # command therefore stays unchanged, matching browser no-input state.
-        assert not _LOCAL_COMMAND_INPUT_STATE["pressed_keys"]
-        assert not _LOCAL_COMMAND_INPUT_STATE["pressed_buttons"]
-        assert not _LOCAL_COMMAND_INPUT_STATE["axis_active"]
 
     dim = configured_dim(config, DEFAULT_COMMAND_DIM)
     raw = _first_present(config, ("values", "commands", "command", "cmd", "cmd_init"))
@@ -1660,6 +1729,16 @@ def _command_vector(config, node_id, context):
         output = _object_command_vector(raw, dim)
     else:
         output = vector_from(raw if raw is not None else [], dim, "obs-commands")
+
+    if command_mode in _INTERACTIVE_COMMAND_MODES:
+        flags = _magnitude_axis_flags(config, dim)
+        if flags and any(flags):
+            _apply_magnitude_axes(config, output, flags)
+        else:
+            # 巡航轴的按键推进没有本地实现：显式中性输入护栏保持不变。
+            assert not _LOCAL_COMMAND_INPUT_STATE["pressed_keys"]
+            assert not _LOCAL_COMMAND_INPUT_STATE["pressed_buttons"]
+            assert not _LOCAL_COMMAND_INPUT_STATE["axis_active"]
 
     if config.get("commandEncoding") in ("one-hot", "mapped") or config.get("encoding") in (
         "one-hot",
