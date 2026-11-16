@@ -1656,14 +1656,18 @@ def _magnitude_axis_flags(config, dim):
 
 
 def _magnitude_binding_index(key, config, dim, names):
-    """``commandBindingIndex`` (keyboardCommands.ts)：数字串是索引，否则查参数名。"""
-    if isinstance(key, bool):
+    """``commandBindingIndex`` (keyboardCommands.ts)：数字串是索引，否则查参数名。
+
+    数字轴 key 只收非负整数：负数会走 Python 负索引绑到错误轴，浮点会被
+    ``int()`` 静默截断，都在这里硬失败（TS 侧正则 ``^(0|[1-9]\\d*)$`` 天然拒绝）。
+    """
+    if isinstance(key, bool) or isinstance(key, float):
         raise _error("mujocoObservations", f"commandBindings has invalid axis {key!r}")
-    if isinstance(key, (int, float)) or (
+    if isinstance(key, int) or (
         isinstance(key, str) and key.isdigit() and (key == "0" or not key.startswith("0"))
     ):
         index = int(key)
-        if index >= dim:
+        if not 0 <= index < dim:
             raise _error(
                 "mujocoObservations",
                 f"commandBindings axis {index} is outside dim {dim}",
@@ -1677,17 +1681,32 @@ def _magnitude_binding_index(key, config, dim, names):
         ) from None
 
 
+def _magnitude_bounds(raw, field, dim):
+    """幅值轴的夹取区间（TS ``requiredCommandBounds``）：必须是与 dim 等长的数值向量。"""
+    values = parse_number_list(raw, field) if raw is not None and raw != "" else []
+    if len(values) != dim:
+        raise _error(
+            "mujocoObservations",
+            f"magnitude axes require a full {field} vector matching the command dim",
+        )
+    return values
+
+
 def _apply_magnitude_axes(config, output, flags):
     """幅值轴：静息 0，increase/decrease 目标 ±参数当前值（夹在轴区间）。
 
     镜像 ``magnitudeAxisTarget`` + ``keyboardCommandVector`` 的无绑定幅值轴
     归零（keyboardCommands.ts）：本地无摇杆，摇杆侧本就归 0；斜坡推进是
     浏览器输入平滑，物理回归直接取目标值。
+
+    返回幅值轴键盘绑定消费的按键名集合：巡航轴的按键本地没有推进实现，
+    ``_command_vector`` 据此收紧中性输入护栏，而不是整体跳过。
     """
     pressed = _LOCAL_COMMAND_INPUT_STATE["pressed_keys"]
     names = list(config.get("parameterNames") or ())
-    minimum = config.get("cmdMin")
-    maximum = config.get("cmdMax")
+    minimum = _magnitude_bounds(config.get("cmdMin"), "cmdMin", len(output))
+    maximum = _magnitude_bounds(config.get("cmdMax"), "cmdMax", len(output))
+    consumed = set()
     bound = set()
     bindings = config.get("commandBindings")
     if isinstance(bindings, dict):
@@ -1700,6 +1719,9 @@ def _apply_magnitude_axes(config, output, flags):
                 continue
             increase = rule.get("increase")
             decrease = rule.get("decrease")
+            for command_key in (increase, decrease):
+                if isinstance(command_key, str) and command_key:
+                    consumed.add(command_key)
             positive = isinstance(increase, str) and increase in pressed
             negative = isinstance(decrease, str) and decrease in pressed
             if positive != negative:
@@ -1711,6 +1733,7 @@ def _apply_magnitude_axes(config, output, flags):
         if flag and index not in bound:
             # 无键盘绑定的幅值轴（只接摇杆）也按幅值语义静息在 0。
             output[index] = 0.0
+    return consumed
 
 
 def _command_vector(config, node_id, context):
@@ -1733,12 +1756,14 @@ def _command_vector(config, node_id, context):
     if command_mode in _INTERACTIVE_COMMAND_MODES:
         flags = _magnitude_axis_flags(config, dim)
         if flags and any(flags):
-            _apply_magnitude_axes(config, output, flags)
+            consumed = _apply_magnitude_axes(config, output, flags)
         else:
-            # 巡航轴的按键推进没有本地实现：显式中性输入护栏保持不变。
-            assert not _LOCAL_COMMAND_INPUT_STATE["pressed_keys"]
-            assert not _LOCAL_COMMAND_INPUT_STATE["pressed_buttons"]
-            assert not _LOCAL_COMMAND_INPUT_STATE["axis_active"]
+            consumed = frozenset()
+        # 巡航轴与手柄输入的按键推进没有本地实现：本地输入必须保持中性，
+        # 只有幅值轴键盘绑定的按键是已实现的例外，其余按键显式失败而非静默忽略。
+        assert _LOCAL_COMMAND_INPUT_STATE["pressed_keys"] <= consumed
+        assert not _LOCAL_COMMAND_INPUT_STATE["pressed_buttons"]
+        assert not _LOCAL_COMMAND_INPUT_STATE["axis_active"]
 
     if config.get("commandEncoding") in ("one-hot", "mapped") or config.get("encoding") in (
         "one-hot",

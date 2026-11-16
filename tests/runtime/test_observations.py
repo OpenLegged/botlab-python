@@ -1715,6 +1715,126 @@ class FillObservationTest(unittest.TestCase):
         np.testing.assert_allclose(processor.output_buffers[0], [0.0], atol=1e-6)
 
 
+class MagnitudeAxesTest(unittest.TestCase):
+    """键盘幅值轴的本地镜像（keyboardCommands.ts 的 magnitude 语义）。"""
+
+    def setUp(self):
+        self.model, self.data = make_forward_model()
+        self._saved_input_state = dict(obs._LOCAL_COMMAND_INPUT_STATE)
+
+    def tearDown(self):
+        obs._LOCAL_COMMAND_INPUT_STATE.clear()
+        obs._LOCAL_COMMAND_INPUT_STATE.update(self._saved_input_state)
+
+    def magnitude_config(self, **overrides):
+        # 轴 0 是幅值轴（ArrowUp/ArrowDown），轴 1 是带按键绑定的巡航轴
+        # （KeyW/KeyS）——混合轴场景：巡航按键本地没有推进实现。
+        config = {
+            "commandMode": "keyboard",
+            "dim": 2,
+            "parameterNames": ["forward", "yaw"],
+            "cmdMin": [-1.0, -1.0],
+            "cmdMax": [1.0, 1.0],
+            "magnitude": [True, False],
+            "commandBindings": {
+                "0": {"increase": "ArrowUp", "decrease": "ArrowDown"},
+                "1": {"increase": "KeyW", "decrease": "KeyS"},
+            },
+        }
+        config.update(overrides)
+        return config
+
+    def fill(self, config, parameters):
+        processor = obs.ObservationProcessor()
+        processor.init({"dim": config["dim"]}, [])
+        target = binding("cmd-node", "obs-commands", config, processor)
+        obs.fill_observation(
+            target,
+            {
+                "model": self.model,
+                "data": self.data,
+                "last_action": None,
+                "parameters": parameters,
+            },
+        )
+        return processor.output_buffers[0]
+
+    def parameters(self, forward=0.3, yaw=-0.2):
+        values = {"forward": forward, "yaw": yaw}
+        return lambda name: values[name]
+
+    def test_magnitude_axis_rests_at_zero_cruise_keeps_parameter(self):
+        values = self.fill(self.magnitude_config(), self.parameters())
+        # 幅值轴静息 0；巡航轴静息 = 参数当前值；未绑定按键不触发护栏。
+        np.testing.assert_allclose(values, [0.0, -0.2], atol=1e-6)
+
+    def test_magnitude_key_press_targets_and_clamps_parameter(self):
+        obs._LOCAL_COMMAND_INPUT_STATE["pressed_keys"] = frozenset({"ArrowUp"})
+        values = self.fill(self.magnitude_config(), self.parameters())
+        np.testing.assert_allclose(values, [0.3, -0.2], atol=1e-6)
+
+        obs._LOCAL_COMMAND_INPUT_STATE["pressed_keys"] = frozenset({"ArrowDown"})
+        values = self.fill(self.magnitude_config(), self.parameters())
+        np.testing.assert_allclose(values, [-0.3, -0.2], atol=1e-6)
+
+        # 目标 ±参数当前值，夹在轴区间内。
+        obs._LOCAL_COMMAND_INPUT_STATE["pressed_keys"] = frozenset({"ArrowUp"})
+        values = self.fill(
+            self.magnitude_config(), self.parameters(forward=1.5)
+        )
+        np.testing.assert_allclose(values, [1.0, -0.2], atol=1e-6)
+
+    def test_unbound_magnitude_axis_rests_at_zero(self):
+        config = self.magnitude_config(
+            commandBindings={"1": {"increase": "KeyW", "decrease": "KeyS"}}
+        )
+        values = self.fill(config, self.parameters())
+        np.testing.assert_allclose(values, [0.0, -0.2], atol=1e-6)
+
+    def test_negative_axis_index_fails(self):
+        # YAML 会把 `-1:` 解析成真 int key（TS 侧对象 key 恒为字符串）。
+        config = self.magnitude_config(commandBindings={-1: {"increase": "ArrowUp"}})
+        with self.assertRaises(ValueError) as ctx:
+            self.fill(config, self.parameters())
+        self.assertIn("commandBindings axis -1 is outside dim 2", str(ctx.exception))
+
+    def test_float_axis_index_fails(self):
+        config = self.magnitude_config(commandBindings={1.7: {"increase": "ArrowUp"}})
+        with self.assertRaises(ValueError) as ctx:
+            self.fill(config, self.parameters())
+        self.assertIn("commandBindings has invalid axis 1.7", str(ctx.exception))
+
+    def test_magnitude_axes_require_cmd_min(self):
+        config = self.magnitude_config()
+        del config["cmdMin"]
+        with self.assertRaises(ValueError) as ctx:
+            self.fill(config, self.parameters())
+        self.assertIn(
+            "magnitude axes require a full cmdMin vector matching the command dim",
+            str(ctx.exception),
+        )
+
+    def test_magnitude_axes_require_full_cmd_max(self):
+        config = self.magnitude_config(cmdMax=[1.0])
+        with self.assertRaises(ValueError) as ctx:
+            self.fill(config, self.parameters())
+        self.assertIn(
+            "magnitude axes require a full cmdMax vector matching the command dim",
+            str(ctx.exception),
+        )
+
+    def test_cruise_key_press_trips_neutral_guard(self):
+        # 巡航轴按键本地没有推进实现：有幅值轴时护栏仍要显式失败，不静默忽略。
+        obs._LOCAL_COMMAND_INPUT_STATE["pressed_keys"] = frozenset({"KeyW"})
+        with self.assertRaises(AssertionError):
+            self.fill(self.magnitude_config(), self.parameters())
+
+    def test_gamepad_button_trips_neutral_guard(self):
+        obs._LOCAL_COMMAND_INPUT_STATE["pressed_buttons"] = frozenset({"a"})
+        with self.assertRaises(AssertionError):
+            self.fill(self.magnitude_config(), self.parameters())
+
+
 class PoseVelocityCommandTest(unittest.TestCase):
     """poseVelocityCommandVector mirror (mujocoObservationCommands.ts).
 
