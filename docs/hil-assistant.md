@@ -15,12 +15,12 @@
 ## 1. 组件检查（只读）
 
 - `which botlab-hil-gateway botlab-agent botlab`；若存在，看脚本 shebang 定位所属 Python 环境（`~/.local/share/uv/tools/<name>/bin/python` = uv tool 安装），用对应方式查版本（`uv tool list` / `python3 -m pip show botlab-python`）。
-- 若本机有该仓库 checkout，`git fetch origin feat/control-protocol-core` 后 `git rev-list --count HEAD..origin/feat/control-protocol-core`，>0 才需要更新。
+- 若本机有该仓库 checkout，`git fetch origin main` 后 `git rev-list --count HEAD..origin/main`，>0 才需要更新。
 - 用 `importlib.util.find_spec` 探测工具环境内 `websockets` / `numpy` / `onnxruntime` 是否齐备，缺哪个补哪个 extras。
 
 ## 2. 安装 / 更新
 
-- 源：`git+https://github.com/OpenLegged/botlab-python.git@feat/control-protocol-core`
+- 源：PyPI `botlab-python>=0.4.1`；需未发布修复时才用 git 源 `git+https://github.com/OpenLegged/botlab-python.git@main`
 - ⚠️ **git 源构建必须前缀 `BOTLAB_ALLOW_MISSING_UI=1`**：UI 快照（`src/botlab/ui`）是生成产物不进 git，否则构建钩子拒绝出包。HIL 场景用不到 UI，此为官方支持用法。
 - 本地 checkout 若含 `src/botlab/ui`，可直接从该目录安装（同一提交、免开关、保留 UI，严格更优）。
 - extras：`[gateway]` = websockets（网关机）；`[target]` = numpy + onnxruntime + websockets（设备端推理必需，缺了 agent 能注册但跑不了模型）；`[runtime]` = 本地 MuJoCo 仿真，HIL 不需要。

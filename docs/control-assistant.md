@@ -26,7 +26,7 @@
 
 ## 2. 安装 / 更新
 
-- 源：`git+https://github.com/OpenLegged/botlab-python.git@feat/control-protocol-core`
+- 源：PyPI `botlab-python>=0.4.1`（`control` 子命令已随正式版发布）；需未发布修复时才用 git 源 `git+https://github.com/OpenLegged/botlab-python.git@main`
 - ⚠️ **git 源构建必须前缀 `BOTLAB_ALLOW_MISSING_UI=1`**：UI 快照（`src/botlab/ui`）是
   生成产物不进 git，否则构建钩子拒绝出包。CLI 控制用不到 UI，此为官方支持用法。
 - 本地 checkout 若含 `src/botlab/ui`，可直接从该目录安装（同一提交、免开关、保留 UI，严格更优）。
