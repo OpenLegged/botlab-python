@@ -1804,6 +1804,18 @@ class MagnitudeAxesTest(unittest.TestCase):
             self.fill(config, self.parameters())
         self.assertIn("commandBindings has invalid axis 1.7", str(ctx.exception))
 
+    def test_duplicate_axis_binding_fails(self):
+        # 索引键与参数名键解析到同一轴：TS commandKeyAxisBindings 同样拒绝。
+        config = self.magnitude_config(
+            commandBindings={
+                0: {"increase": "ArrowUp", "decrease": "ArrowDown"},
+                "forward": {"increase": "KeyN", "decrease": "KeyP"},
+            }
+        )
+        with self.assertRaises(ValueError) as ctx:
+            self.fill(config, self.parameters())
+        self.assertIn("commandBindings defines axis 0 more than once", str(ctx.exception))
+
     def test_magnitude_axes_require_cmd_min(self):
         config = self.magnitude_config()
         del config["cmdMin"]

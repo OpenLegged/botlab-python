@@ -1714,6 +1714,11 @@ def _apply_magnitude_axes(config, output, flags):
             if not isinstance(rule, dict):
                 continue
             index = _magnitude_binding_index(key, config, len(output), names)
+            if index in bound:
+                raise _error(
+                    "mujocoObservations",
+                    f"commandBindings defines axis {index} more than once",
+                )
             bound.add(index)
             if not flags[index]:
                 continue
