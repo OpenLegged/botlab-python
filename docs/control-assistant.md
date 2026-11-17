@@ -1,5 +1,7 @@
 # BotLab Control CLI 部署 runbook（AI 助手专用）
 
+> English version: [control-assistant.en.md](control-assistant.en.md)。两份内容同步维护，改其一必须改另一份。
+
 本文件是 BotLab 网页版「CLI 控制」面板提示词的**目标文档**：面板提示词只需一句话指向本文件。
 读者是用户委托的 AI 助手。按本文件执行即可把「CLI → 通用中间件 → 浏览器页面」链路跑通。
 

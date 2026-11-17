@@ -1,5 +1,7 @@
 # BotLab HIL 设备链路部署 runbook（AI 助手专用）
 
+> English version: [hil-assistant.en.md](hil-assistant.en.md)。两份内容同步维护，改其一必须改另一份。
+
 本文件是 BotLab 网页版「设备网关」面板提示词的**目标文档**：面板提示词只需一句话指向本文件。
 读者是用户委托的 AI 助手。按本文件执行即可把「浏览器 ↔ 网关 ↔ 设备 agent」链路跑通。
 
@@ -46,10 +48,13 @@ BOTLAB_HIL_TOKEN=<令牌> botlab-agent connect --gateway ws://127.0.0.1:50060 --
 流量由 SSH 加密，因此不需要域名、证书或 `wss://`。
 
 **先做硬件适配**：SSH 可达后先识别板卡——`cat /proc/device-tree/model`、
-`. /etc/os-release && echo "$PRETTY_NAME"`——再对照仓库 [`skills/`](../skills/README.md)
-目录（读各 `skills/*/SKILL.md` 的 frontmatter）。命中则把该 skill 作为本节的板卡侧
-补充（默认组网、系统坑、实测版本都写在里面，只加载命中的那一份）；未命中则按本节
-通用命令走，跑通后欢迎按 `skills/README.md` 回来贡献一个。
+`. /etc/os-release && echo "$PRETTY_NAME"`——再加载匹配的硬件 skill。skill 固定在
+**本仓库根的 [`skills/`](../skills/README.md) 目录**（本文件位于 `docs/`，两者同分支）：
+本地 checkout 直接读 `skills/*/SKILL.md`；只拿到本文件 URL 时，把 URL 路径中的
+`docs/hil-assistant.md` 替换成 `skills/README.md` 即为 skill 索引。用各 skill
+frontmatter 的 `metadata.hardware` / `metadata.os` 与识别结果匹配，命中则把该 skill
+作为本节的板卡侧补充（默认组网、系统坑、实测版本都写在里面，只加载命中的那一份）；
+未命中则按本节通用命令走，跑通后欢迎按 `skills/README.md` 回来贡献一个。
 
 ```bash
 # 助手机（有外网 + 本仓库 checkout）：构建本包 wheel + 按板卡标签下载依赖 wheel
