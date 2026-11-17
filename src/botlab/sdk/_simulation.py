@@ -10,6 +10,39 @@ from ._robot import Robot
 from ._runtime_types import Frame
 
 
+def _native_modifier_proxy(modify_action):
+    """Wrap one ``Signal.action(modify=...)`` callable for the native host.
+
+    Returns ``None`` when the controller declares no modify hook. Under the
+    static host the Python callable itself marks the plan as needing the
+    Python runtime; under Pyodide it is wrapped with the snapshot/Frame
+    adapter and exposed through ``create_proxy``.
+    """
+    if modify_action is None:
+        return None
+    if create_proxy is None:
+        return modify_action
+
+    def snapshot_action(action):
+        # Engine buffers cross as typed views under Pyodide; reading the
+        # shared memory and materializing the list in C beats iterating
+        # the proxy element by element. The native host already sends
+        # plain sequences.
+        to_py = getattr(action, "to_py", None)
+        return list(action if to_py is None else to_py())
+
+    async def modify_action_proxy(action, dt, time, index):
+        result = modify_action(
+            snapshot_action(action),
+            Frame(dt, time, index),
+        )
+        if inspect.isawaitable(result):
+            result = await result
+        return result
+
+    return create_proxy(modify_action_proxy)
+
+
 class Resources:
     """Handles for resources the project already declared, looked up by id."""
 
@@ -164,15 +197,30 @@ class Simulation:
             )
         if all(native_controllers):
             if is_group:
-                if any(item.modify_action is not None for item in controllers):
-                    raise TypeError(
-                        "Simulation.run native controller groups do not support "
-                        "Signal.action(modify=...)"
-                    )
-                botlab_host.registerPolicyController({
+                # 每个控制器各带一个可选 modify：第二参数是与 controllers 对齐
+                # 的列表（无 modify 的项为 None）。全部为 None 时保持旧的
+                # 单参数调用形式。
+                modifier_proxies = [
+                    _native_modifier_proxy(item.modify_action)
+                    for item in controllers
+                ]
+                envelope = {
                     "version": 1,
                     "controllers": [item._plan_data for item in controllers],
-                })
+                }
+                try:
+                    if any(proxy is not None for proxy in modifier_proxies):
+                        botlab_host.registerPolicyController(
+                            envelope,
+                            modifier_proxies,
+                        )
+                    else:
+                        botlab_host.registerPolicyController(envelope)
+                except Exception:
+                    for proxy in modifier_proxies:
+                        if proxy is not None and create_proxy is not None:
+                            proxy.destroy()
+                    raise
                 botlab_host.log(
                     "info",
                     "Python",
@@ -181,33 +229,10 @@ class Simulation:
                 return
 
             controller = controllers[0]
-            modifier_proxy = None
-            modifier_is_proxy = False
-            if controller.modify_action is not None:
-                def snapshot_action(action):
-                    # Engine buffers cross as typed views under Pyodide; reading the
-                    # shared memory and materializing the list in C beats iterating
-                    # the proxy element by element. The native host already sends
-                    # plain sequences.
-                    to_py = getattr(action, "to_py", None)
-                    return list(action if to_py is None else to_py())
-
-                async def modify_action(action, dt, time, index):
-                    result = controller.modify_action(
-                        snapshot_action(action),
-                        Frame(dt, time, index),
-                    )
-                    if inspect.isawaitable(result):
-                        result = await result
-                    return result
-
-                if create_proxy is None:
-                    # Static host: the callable itself marks the plan as
-                    # needing the Python runtime instead of a JS callback.
-                    modifier_proxy = controller.modify_action
-                else:
-                    modifier_proxy = create_proxy(modify_action)
-                    modifier_is_proxy = True
+            modifier_proxy = _native_modifier_proxy(controller.modify_action)
+            modifier_is_proxy = (
+                modifier_proxy is not None and create_proxy is not None
+            )
             try:
                 if modifier_proxy is None:
                     botlab_host.registerPolicyController(controller._plan_data)
