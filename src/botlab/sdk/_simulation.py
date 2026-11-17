@@ -97,6 +97,21 @@ class OverlayChannel(OutputChannel):
         OutputChannel.update(self, value)
 
 
+class ControlsHudChannel(OutputChannel):
+    """``sim.controls_hud``: bottom-strip key hints for custom controllers.
+
+    The per-item rules (fields, localized labels, limits) live in the
+    TypeScript contract -- ``parseControlsHudDeclaration`` is the single
+    source of truth and this side does not duplicate them. Python only
+    insists the payload itself is a list before handing it to the host.
+    """
+
+    def update(self, value):
+        if not isinstance(value, list):
+            raise TypeError("controls_hud.update() expects a list of items")
+        OutputChannel.update(self, value)
+
+
 class Simulation:
     @classmethod
     def from_project(cls):
@@ -108,6 +123,7 @@ class Simulation:
         self.metrics = OutputChannel("updateMetrics")
         self.diagnostics = OutputChannel("updateDiagnostics")
         self.overlay = OverlayChannel("updateOverlay")
+        self.controls_hud = ControlsHudChannel("updateControlsHud")
 
     def model(self, path):
         """The ONNX model this project declared at `path`.

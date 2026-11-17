@@ -434,6 +434,26 @@ class Robot:
             raise ValueError("gamepad_pressed gamepad must be an integer slot 0..3")
         return bool(botlab_host.gamepadPressed(gamepad, button))
 
+    def gamepad_axis(self, axis, *, gamepad=0):
+        """Read a gamepad analog axis on ``gamepad`` slot, clamped to [-1, 1].
+
+        ``axis`` is a W3C standard-mapping axis index (0..3: left stick x/y,
+        right stick x/y); aliases are not accepted. ``gamepad`` selects the
+        slot exactly like ``commands(gamepad=N)``: the Nth connected gamepad in
+        ascending index order, 0 by default. A slot with no connected gamepad
+        reads 0.0 -- pads are hot-pluggable. Sticks that report slightly past
+        the detent are clamped to the documented range.
+        """
+        if isinstance(axis, bool) or not isinstance(axis, int):
+            raise ValueError("gamepad_axis axis must be an integer index 0..3")
+        if axis < 0 or axis > 3:
+            raise ValueError("gamepad_axis axis must be an integer index 0..3")
+        if isinstance(gamepad, bool) or not isinstance(gamepad, int):
+            raise ValueError("gamepad_axis gamepad must be an integer slot 0..3")
+        if gamepad not in (0, 1, 2, 3):
+            raise ValueError("gamepad_axis gamepad must be an integer slot 0..3")
+        return float(botlab_host.gamepadAxis(gamepad, axis))
+
     def apply_force(self, body, force):
         """Apply a one-control-tick external force at ``body``'s origin.
 
