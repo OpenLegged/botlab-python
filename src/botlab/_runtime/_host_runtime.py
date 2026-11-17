@@ -12,6 +12,7 @@ then physics substeps run for the rest of the control period.
 import asyncio
 import inspect
 import os
+from collections.abc import Mapping
 
 from ..sdk._runtime_types import Frame
 
@@ -500,6 +501,33 @@ class LocalRuntimeSession:
     def updateDiagnostics(self, diagnostics):
         if self._display is not None:
             self._display.update_diagnostics(diagnostics)
+
+    def updateOverlay(self, overlay):
+        # Presentation-only channels: validate the payload so a bad update
+        # still fails hard, then hand it to a display adapter that supports
+        # scene overlays. The bundled local display does not (yet), so a
+        # headless or plain viewer run simply drops the value.
+        if not isinstance(overlay, Mapping):
+            raise TypeError("overlay.update() expects a mapping of {id: item}")
+        if self._display is not None:
+            update = getattr(self._display, "update_overlay", None)
+            if update is not None:
+                update(overlay)
+
+    def updateControlsHud(self, items):
+        if not isinstance(items, list):
+            raise TypeError("controls_hud.update() expects a list of items")
+        if self._display is not None:
+            update = getattr(self._display, "update_controls_hud", None)
+            if update is not None:
+                update(items)
+
+    def applyExternalForce(self, robot_id, body, force):
+        del robot_id, body, force
+        raise RuntimeError(
+            "[botlab] Robot.apply_force() is not supported by the local runtime; "
+            "external force assists are only applied by the browser simulation."
+        )
 
     def requestReset(self, reason, spec=None):
         if self._in_plan_step:

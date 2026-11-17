@@ -25,6 +25,15 @@ class FakeSession:
         self.calls.append(("predictModel", rid, list(values)))
         return [0.5]
 
+    def updateOverlay(self, overlay):
+        self.calls.append(("updateOverlay", dict(overlay)))
+
+    def updateControlsHud(self, items):
+        self.calls.append(("updateControlsHud", list(items)))
+
+    def applyExternalForce(self, rid, body, force):
+        self.calls.append(("applyExternalForce", rid, body, list(force)))
+
     def registerStep(self, proxy, robot_ids=None):
         self.calls.append(("registerStep", robot_ids))
 
@@ -54,11 +63,42 @@ def test_runtime_calls_raise_without_session(clean_state):
     with pytest.raises(BotLabError, match="live simulation runtime"):
         _host.updateMetrics({"x": 1.0})
     with pytest.raises(BotLabError, match="live simulation runtime"):
+        _host.updateOverlay({"tag": {"kind": "label"}})
+    with pytest.raises(BotLabError, match="live simulation runtime"):
+        _host.updateControlsHud([{"input": "W", "action": "Move"}])
+    with pytest.raises(BotLabError, match="live simulation runtime"):
+        _host.applyExternalForce("Robot", "pelvis", [1.0, 0.0, 0.0])
+    with pytest.raises(BotLabError, match="live simulation runtime"):
         _host.loadMotion("walk")
     with pytest.raises(BotLabError, match="live simulation runtime"):
         _host.readMujoco("Robot", "qpos")
     with pytest.raises(BotLabError, match="live simulation runtime"):
         _host.requestReset("why")
+
+
+def test_interactive_input_reads_neutral_without_devices(clean_state):
+    # The native runner captures no keyboard/gamepad input; queries stay
+    # falsy instead of raising so the same controller code runs headless.
+    assert _host.keyPressed("Space") is False
+    assert _host.gamepadPressed(0, 0) is False
+    assert _host.gamepadPressed(3, 16) is False
+    assert _host.gamepadAxis(0, 0) == 0.0
+    assert _host.gamepadAxis(3, 3) == 0.0
+
+
+def test_sdk_input_and_presentation_helpers_reach_the_host(clean_state):
+    from botlab import Robot, Simulation
+
+    robot = Robot._from_id("Robot")
+    assert robot.key_pressed("Space") is False
+    assert robot.gamepad_pressed(16, gamepad=3) is False
+    assert robot.gamepad_axis(3, gamepad=3) == 0.0
+
+    simulation = Simulation()
+    with pytest.raises(BotLabError, match="live simulation runtime"):
+        simulation.overlay.update({})
+    with pytest.raises(BotLabError, match="live simulation runtime"):
+        simulation.controls_hud.update([])
 
 
 def test_runtime_calls_delegate_to_installed_session(clean_state):
@@ -68,6 +108,9 @@ def test_runtime_calls_delegate_to_installed_session(clean_state):
     assert _host.observe("Robot") == {"qpos": [0.0] * 10}
     _host.applyAction("Robot", [1.0, 2.0, 3.0])
     _host.requestReset("tilted", {"motionId": "walk"})
+    _host.updateOverlay({"tag": {"kind": "label"}})
+    _host.updateControlsHud([{"input": "W", "action": "Move"}])
+    _host.applyExternalForce("Robot", "pelvis", [1.0, 0.0, 0.0])
     _host.registerStep(lambda: None, ["Robot"])
 
     # The session owns the async shape; the delegation must pass it through.
@@ -79,6 +122,9 @@ def test_runtime_calls_delegate_to_installed_session(clean_state):
         ("observe", "Robot"),
         ("applyAction", "Robot", [1.0, 2.0, 3.0]),
         ("requestReset", "tilted", {"motionId": "walk"}),
+        ("updateOverlay", {"tag": {"kind": "label"}}),
+        ("updateControlsHud", [{"input": "W", "action": "Move"}]),
+        ("applyExternalForce", "Robot", "pelvis", [1.0, 0.0, 0.0]),
         ("registerStep", ["Robot"]),
         ("predictModel", "Actor", [0.25]),
     ]
