@@ -1,5 +1,6 @@
 """Simulation entry point with resource, parameter and output handles."""
 import inspect
+from collections.abc import Mapping
 
 import botlab_host
 
@@ -81,6 +82,21 @@ class OutputChannel:
         getattr(botlab_host, self._name)(value)
 
 
+class OverlayChannel(OutputChannel):
+    """``sim.overlay``: game-style scene annotations for the viewer.
+
+    The per-item rules (kinds, fields, ranges, colors) live in the
+    TypeScript contract -- ``parseSceneOverlay`` is the single source of
+    truth and this side does not duplicate them. Python only insists the
+    payload itself is a mapping before handing it to the host.
+    """
+
+    def update(self, value):
+        if not isinstance(value, Mapping):
+            raise TypeError("overlay.update() expects a mapping of {id: item}")
+        OutputChannel.update(self, value)
+
+
 class Simulation:
     @classmethod
     def from_project(cls):
@@ -91,6 +107,7 @@ class Simulation:
         self.parameters = Parameters()
         self.metrics = OutputChannel("updateMetrics")
         self.diagnostics = OutputChannel("updateDiagnostics")
+        self.overlay = OverlayChannel("updateOverlay")
 
     def model(self, path):
         """The ONNX model this project declared at `path`.
