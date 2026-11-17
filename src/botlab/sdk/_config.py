@@ -367,7 +367,15 @@ class _Parser:
             self._error(first.number, "a document marker here would start a second document")
         if self._is_sequence_entry(first.content):
             self._error(first.number, "the YAML document root must be a mapping")
-        root = self._parse_mapping(first)
+        if first.content[0] in "{[":
+            # A flow mapping at the root is a JSON document — the format pyodide
+            # file-rule handlers emit (Pyodide ships no PyYAML), and the TS end
+            # accepts it as YAML 1.2, so this end must read the same documents.
+            root = self._parse_flow(first, first.content)
+            if not isinstance(root, dict):
+                self._error(first.number, "the YAML document root must be a mapping")
+        else:
+            root = self._parse_mapping(first)
         trailing = self._peek()
         if trailing is not None:
             if trailing.content == "...":

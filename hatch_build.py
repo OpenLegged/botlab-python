@@ -22,6 +22,7 @@ _REQUIRED_DOCS = (
     "decision-table.md",
     "error-guide.md",
     "onnx-export.md",
+    "project-setup.md",
 )
 
 

@@ -86,11 +86,22 @@ for first connection, CLI commands, deployment layout and current limits.
 my-robot-project/
 ├── main.py                 # Fixed four-line entry point
 ├── controller.py           # Project declarations and control expressions
-├── config/                 # Optional: declaration data split into yaml files
-│   └── runtime.yaml        #   referenced canonically via read_config("config/runtime.yaml")
-├── robot.preset.yaml       # Joint order, PD gains, initial state, and calibration
-└── assets/                 # Project-relative MJCF, ONNX, meshes, and other assets
+├── config/                 # Declaration data, referenced via read_config("config/<name>.yaml")
+│   ├── runtime.yaml        # name, control_hz, physics_hz
+│   ├── parameters.yaml     # tunable parameters (label/default/range/step/unit)
+│   ├── keyboard.yaml       # keyboard bindings (gamepad.yaml optional)
+│   ├── watch.yaml          # Watch panel curves    ┐ fed via project(panels={...})
+│   ├── metrics.yaml        # Metrics panel readouts ┘
+│   ├── control.yaml        # optional control_profile for external control
+│   └── robot.preset.yaml   # Joint order, PD gains, initial state, and calibration
+│                            # (one <device>.preset.yaml per calibrated resource)
+└── assets/                 # Project-relative MJCF (+ meshes), ONNX, and scene XML
 ```
+
+See [docs/project-setup.md](docs/project-setup.md) for the step-by-step scaffold:
+write the skeleton, drop assets, calibrate presets, declare resources, then the
+three-section `create_controller` (observation → policy → output). Root-level
+`*.preset.yaml` files are a legacy form: read-compatible, never created new.
 
 `main.py` must use the standard four-line entry point required by compiled
 controller releases:
@@ -122,7 +133,7 @@ def create_controller(sim):
     ])
     action = actor(observation).action()
     target = robot.default_angles + robot.action_scale * action[robot.motor_order]
-    return PolicyController(robot, control=target)
+    return PolicyController(robot, target=target)
 ```
 
 See the BotLab repository's `docs/api/` directory for the complete API
@@ -180,7 +191,7 @@ with unused legacy files. Use a browser runtime that supports `project(panels=..
 | `botlab ui fetch` | Install the browser runtime built by the BotLab frontend: `--archive <file>` imports an offline archive, `--url <url>` downloads from a mirror (or set `BOTLAB_RUNTIME_URL`). |
 | `botlab ui export --botlab <path> --out <file.zip>` | Export the separate version-matched browser runtime distribution from a BotLab build. |
 | `botlab ui status` | Show the status of the bundled UI snapshot. |
-| `botlab docs` | Print where the bundled docs (component reference, decision table, error guide) live in this install. |
+| `botlab docs` | Print where the bundled docs (project setup guide, component reference, decision table, error guide) live in this install. |
 
 Resource names are identities: `Sensor(robot, name="Depth")` refers to the
 robot's declared ID even when `Robot(..., name="G1")` has a separate MJCF path.
@@ -266,6 +277,10 @@ existing clients.
 
 ## Documentation
 
+- [Project setup guide](https://github.com/OpenLegged/botlab-python/blob/main/docs/project-setup.md)
+  — scaffold a runnable project from scratch: skeleton, assets, presets,
+  declarations, three-section controller, config split, and the validate/run
+  loop.
 - [Component reference](https://github.com/OpenLegged/botlab-python/blob/main/docs/component-reference.md)
   — all public SDK symbols and their contracts.
 - [Decision table](https://github.com/OpenLegged/botlab-python/blob/main/docs/decision-table.md)

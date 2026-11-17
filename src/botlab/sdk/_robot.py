@@ -405,6 +405,51 @@ class Robot:
         """The previous frame's Signal.action() value."""
         return Signal("obs-actions", "last-action", {"dim": self.action_dimension()})
 
+    def key_pressed(self, code):
+        """Whether an interactive command key is currently held down.
+
+        Reads the same pressed-key state as ``commands(input_mode="keyboard")``,
+        for per-frame logic inside ``Signal.action(modify=...)`` (e.g. hold-to-
+        charge strike keys). Accepts ``KeyboardEvent.code`` values or short
+        forms like ``"space"`` / ``"KeyW"``.
+        """
+        return bool(botlab_host.keyPressed(_non_empty_string(code, "key_pressed code")))
+
+    def gamepad_pressed(self, button, *, gamepad=0):
+        """Whether a gamepad button is currently held down on ``gamepad`` slot.
+
+        ``button`` is a W3C standard-mapping button index (0..16, e.g. 0 is
+        the bottom face button A/cross); aliases are not accepted. ``gamepad``
+        selects the slot exactly like ``commands(gamepad=N)``: the Nth
+        connected gamepad in ascending index order, 0 by default. A slot with
+        no connected gamepad reads as not pressed -- pads are hot-pluggable.
+        """
+        if isinstance(button, bool) or not isinstance(button, int):
+            raise ValueError("gamepad_pressed button must be an integer index 0..16")
+        if button < 0 or button > 16:
+            raise ValueError("gamepad_pressed button must be an integer index 0..16")
+        if isinstance(gamepad, bool) or not isinstance(gamepad, int):
+            raise ValueError("gamepad_pressed gamepad must be an integer slot 0..3")
+        if gamepad not in (0, 1, 2, 3):
+            raise ValueError("gamepad_pressed gamepad must be an integer slot 0..3")
+        return bool(botlab_host.gamepadPressed(gamepad, button))
+
+    def apply_force(self, body, force):
+        """Apply a one-control-tick external force at ``body``'s origin.
+
+        Meant for physics assists inside the per-frame ``Signal.action(modify=...)``
+        hook (kick amplification, pushes, gusts): the force is applied at the
+        body's current position on every physics substep of the next control
+        tick, then expires. Multiple calls in the same control tick stack --
+        forces on the same body add up. Unknown body names fail hard in the
+        worker.
+        """
+        name = _non_empty_string(body, "apply_force body")
+        values = _finite_values(force, "apply_force force")
+        if len(values) != 3:
+            raise ValueError("apply_force force must contain exactly 3 numbers")
+        botlab_host.applyExternalForce(self.id, name, values)
+
     def velocity_pd(self, target, *, kp=None, effort_limit=None):
         """Convert a native-order joint velocity target into clipped actuator effort."""
         target = _as_signal(target, "velocity_pd target")
@@ -475,13 +520,19 @@ class Robot:
 
         ``keyboard={"bindings": {axis: {increase, decrease}}}`` or
         ``{"mappings": [{key, value, label}]}``; ``gamepad={"bindings": {axis:
-        {stick, axis, invert}}}``, ``{"mappings": [{button, value, label}]}``
-        or ``deadzone``. Binding axes are parameter names (or axis indices)
-        of this vector; neither device section declares the vector, so the
-        two files never mirror each other. ``commandMode`` derives from which
-        devices carry axis bindings (keyboard / gamepad / keyboard-gamepad).
-        A ``ramp_rate`` of zero disables smoothing and applies interactive
-        input immediately.
+        {stick, axis, invert}}}``, ``{"mappings": [{button, value, label}]}``,
+        ``deadzone`` or ``slot``. Binding axes are parameter names (or axis
+        indices) of this vector; neither device section declares the vector,
+        so the two files never mirror each other. ``commandMode`` derives from
+        which devices carry axis bindings (keyboard / gamepad /
+        keyboard-gamepad). A ``ramp_rate`` of zero disables smoothing and
+        applies interactive input immediately.
+
+        ``gamepad={"slot": N}`` (0..3) binds this command node to gamepad
+        slot N: the Nth connected gamepad in ascending ``index`` order.
+        The slot is hot-pluggable -- a missing pad reads neutral axes
+        instead of failing. Slots distinguish same-model pads in
+        multi-robot projects; a slot requires gamepad axis bindings.
 
         When a device section carries ``mappings`` the call takes no parameter
         axes: the mappings' ``value`` / ``values`` ARE the command's value set
@@ -496,9 +547,9 @@ class Robot:
         command layout (e.g. a ``(forward, lateral, yaw)`` policy driven with
         lateral fixed at zero takes ``("forward_velocity", 0, "yaw_rate")``)
         without declaring a dead parameter for it; the plan carries it as an
-        empty-string axis name. Constant axes clamp keys, sticks, and touch
-        to the constant, and need the named axes' parameter ranges so the
-        plan emits one bounds vector.
+        empty-string axis name. Constant axes clamp keys, sticks, touch, and
+        waypoint tracking to the constant, and need the named axes' parameter
+        ranges so the plan emits one bounds vector.
 
         ``magnitude=[names]`` marks axes as magnitude axes: they rest at zero
         and interactive inputs (keys, gamepad stick, touch) command plus or
@@ -519,8 +570,18 @@ class Robot:
             parameter_names = parameters
         keyboard_section = _command_device_section(keyboard, "keyboard", {"bindings", "mappings"})
         gamepad_section = _command_device_section(
-            gamepad, "gamepad", {"bindings", "mappings", "deadzone"}
+            gamepad, "gamepad", {"bindings", "mappings", "deadzone", "slot"}
         )
+        # 手柄槽位（多人工程区分同型号手柄）：只随轴绑定生效，热插拔缺位读中立值。
+        if gamepad_section is not None and "slot" in gamepad_section:
+            slot = gamepad_section["slot"]
+            if isinstance(slot, bool) or not isinstance(slot, int) or slot not in (0, 1, 2, 3):
+                raise ValueError("commands gamepad slot must be an integer 0..3")
+            if "bindings" not in gamepad_section:
+                raise ValueError(
+                    "commands gamepad slot requires gamepad axis bindings "
+                    "(mappings read no sticks)"
+                )
         has_keyboard_mappings = keyboard_section is not None and "mappings" in keyboard_section
         has_gamepad_mappings = gamepad_section is not None and "mappings" in gamepad_section
         has_mappings = has_keyboard_mappings or has_gamepad_mappings
@@ -607,6 +668,8 @@ class Robot:
                 raise ValueError("commands mappings cannot be combined with magnitude axes")
             data["commandEncoding"] = "mapped"
             data["commandMappings"] = mapped
+        if gamepad_section is not None and "slot" in gamepad_section:
+            data["gamepadSlot"] = gamepad_section["slot"]
         if ramp_rate is not None:
             ramp_rate = _finite_number(ramp_rate, "commands ramp_rate")
             if ramp_rate < 0:
@@ -651,8 +714,8 @@ class Robot:
         if waypoint is not None:
             if not isinstance(waypoint, dict):
                 raise TypeError("commands waypoint must come from waypoint_tracking()")
-            if has_constants:
-                raise ValueError("commands waypoint cannot combine with constant axes")
+            # 常量轴与 waypoint 兼容：跟踪器按 cmdMin/cmdMax 钉住该轴（如横移恒
+            # 0 的航点巡航策略），布局槽位照样不占参数。
             data.update(waypoint)
         return Signal("obs-commands", "commands", data)
 
