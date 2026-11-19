@@ -103,7 +103,7 @@ def test_full_build_deploy_load_run_stop_unload_management(management):
     running = completed(api, api("POST", "/hil/start"))
     session = running["session"]
     metadata = api("POST", "/hil/models", {"session": session,
-                    "sha256": built["models"][0]["sha256"]})
+                    "sha256": next(r["sha256"] for r in built["resources"] if r["kind"] == "model")})
     port = metadata["inputs"][0]
     data = [float(index) for index in range(math.prod(port["shape"]))]
     inferred = api("POST", "/hil/infer", {"session": session, "seq": 0,
@@ -214,8 +214,8 @@ def test_stepwise_run_uses_exact_selected_release_without_build_deploy_or_load(m
     assert calls == ["start"]
     assert api("GET", "/hil/state")["capabilities"]["stepwiseExecution"] == 1
     metadata = api("POST", "/hil/models", {"session": result["session"],
-                                            "sha256": first["models"][0]["sha256"]})
-    assert metadata["sha256"] == first["models"][0]["sha256"]
+                                            "sha256": next(r["sha256"] for r in first["resources"] if r["kind"] == "model")})
+    assert metadata["sha256"] == next(r["sha256"] for r in first["resources"] if r["kind"] == "model")
     api("POST", "/hil/stop", {"session": result["session"]})
     assert agent.loaded == first
 
@@ -813,7 +813,7 @@ def test_running_project_rejects_device_management_without_releasing_session(man
     assert host.application["loaded"] == agent.loaded == loaded
     assert host.device_info["cpu"]["agent_installed"]
     # The same real Agent lease still accepts a model request after rejection.
-    model = host.application["built"]["models"][0]["sha256"]
+    model = next(r["sha256"] for r in host.application["built"]["resources"] if r["kind"] == "model")
     metadata = api("POST", "/hil/models", {"session": session, "sha256": model})
     port = metadata["inputs"][0]
     values = [float(index) for index in range(math.prod(port["shape"]))]

@@ -10,6 +10,7 @@ from urllib.parse import urlsplit
 
 VERSION = 1
 MAX_MODEL_BYTES = 32 * 1024 * 1024
+MAX_CHUNK_BYTES = 32 * 1024 * 1024
 MAX_FRAME_BYTES = 48 * 1024 * 1024
 MAX_TENSOR_ELEMENTS = 1_000_000
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
