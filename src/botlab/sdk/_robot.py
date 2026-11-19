@@ -434,6 +434,26 @@ class Robot:
             raise ValueError("gamepad_pressed gamepad must be an integer slot 0..3")
         return bool(botlab_host.gamepadPressed(gamepad, button))
 
+    def gamepad_axis(self, axis, *, gamepad=0):
+        """Read a gamepad analog axis on ``gamepad`` slot, clamped to [-1, 1].
+
+        ``axis`` is a W3C standard-mapping axis index (0..3: left stick x/y,
+        right stick x/y); aliases are not accepted. ``gamepad`` selects the
+        slot exactly like ``commands(gamepad=N)``: the Nth connected gamepad in
+        ascending index order, 0 by default. A slot with no connected gamepad
+        reads 0.0 -- pads are hot-pluggable. Sticks that report slightly past
+        the detent are clamped to the documented range.
+        """
+        if isinstance(axis, bool) or not isinstance(axis, int):
+            raise ValueError("gamepad_axis axis must be an integer index 0..3")
+        if axis < 0 or axis > 3:
+            raise ValueError("gamepad_axis axis must be an integer index 0..3")
+        if isinstance(gamepad, bool) or not isinstance(gamepad, int):
+            raise ValueError("gamepad_axis gamepad must be an integer slot 0..3")
+        if gamepad not in (0, 1, 2, 3):
+            raise ValueError("gamepad_axis gamepad must be an integer slot 0..3")
+        return float(botlab_host.gamepadAxis(gamepad, axis))
+
     def apply_force(self, body, force):
         """Apply a one-control-tick external force at ``body``'s origin.
 
@@ -449,6 +469,31 @@ class Robot:
         if len(values) != 3:
             raise ValueError("apply_force force must contain exactly 3 numbers")
         botlab_host.applyExternalForce(self.id, name, values)
+
+    def teleport(self, x, y, yaw, *, reset_joints=True):
+        """Move this robot's root free joint to ``(x, y)`` facing ``yaw``.
+
+        The root height is kept from the call's current root z (the preset initial
+        height is a spawn concern, not a mid-run teleport one). ``yaw`` is a
+        world-frame rotation about +z and replaces the root orientation, so roll
+        and pitch are cleared; root linear and angular velocity are zeroed.
+        ``reset_joints=True`` writes the preset's initial joint positions and zeros
+        joint velocities, giving the standing pose; pass ``False`` to keep the
+        current joints. Writes the robot's own qpos/qvel scope, so the second robot
+        of a composed scene lands at its own offsets.
+
+        Only valid inside a control step. The write lands before the first physics
+        substep of the next tick, followed by ``mj_forward``. Calling it again for
+        the same robot in the same control step replaces the earlier write.
+        """
+        x_value = _finite_number(x, "teleport x")
+        y_value = _finite_number(y, "teleport y")
+        yaw_value = _finite_number(yaw, "teleport yaw")
+        if not isinstance(reset_joints, bool):
+            raise ValueError("teleport reset_joints must be a boolean")
+        botlab_host.teleportRobot(
+            self.id, x_value, y_value, yaw_value, reset_joints
+        )
 
     def velocity_pd(self, target, *, kp=None, effort_limit=None):
         """Convert a native-order joint velocity target into clipped actuator effort."""

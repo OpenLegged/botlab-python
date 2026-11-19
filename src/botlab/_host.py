@@ -687,6 +687,13 @@ def declareProjectControl(control, location=None):  # noqa: N802
     del control
 
 
+def declareProjectObservation(observation, location=None):  # noqa: N802
+    del location
+    # Same pairing-only concern as the control declaration: world_bodies
+    # truth feeds the browser state frame; the native collector drops it.
+    del observation
+
+
 def requireResource(rid, kind):  # noqa: N802
     return _active().require_resource(rid, kind)
 

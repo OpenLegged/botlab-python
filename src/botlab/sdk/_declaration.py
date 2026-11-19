@@ -246,6 +246,14 @@ _CONTROL_NAME = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 _CONTROL_CAPABILITY = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$")
 _CONTROL_RESERVED_CAPABILITIES = ("motion.twist", "control.stop")
 _CONTROL_EXPERIENCE_LIMIT = 32768
+
+# The observation face is a separate declaration from the control face: which
+# scene bodies' world-frame ground truth joins the external control state frame.
+# Privileged observers only -- there is no feedback switch, mirroring the
+# simulator-ground-truth meaning of "privileged information". Keep the body cap
+# in sync with OBSERVATION_WORLD_BODIES_MAX in observationDeclaration.ts.
+_OBSERVATION_SCHEMA = "botlab.observation.profile.v1"
+_OBSERVATION_BODIES_LIMIT = 16
 # Per-kind command time budgets are project-declarable, but the platform hard
 # caps are a protocol invariant mirrored here so an over-budget declaration
 # fails at declaration time, not on first command. Keep in sync with
@@ -548,6 +556,50 @@ def declare_control(control):
     """
     botlab_host.declareProjectControl(
         _plan_value(_control_profile_value(control), "project control"),
+        _declaration_location(),
+    )
+
+
+def observation_profile(bodies):
+    """Declare which scene bodies' world truth joins the control state frame.
+
+    ``bodies`` is a non-empty sequence of body names in the composed scene
+    (robot plus scene resources). A privileged observer reads each entry in the
+    state frame's ``world_bodies`` section as world-frame position and linear
+    velocity; a non-privileged observer gets ``null`` -- the channels are
+    privileged by design and cannot be opened through the control profile's
+    ``feedback`` block. Pass the result to :func:`declare_observation`.
+    """
+    items = list(bodies) if isinstance(bodies, (list, tuple)) else None
+    if not items:
+        raise ValueError("observation_profile bodies must be a non-empty sequence of body names")
+    if len(items) > _OBSERVATION_BODIES_LIMIT:
+        raise ValueError(
+            f"observation_profile bodies exceeds {_OBSERVATION_BODIES_LIMIT} entries"
+        )
+    world_bodies = []
+    for index, body in enumerate(items):
+        name = _non_empty_string(body, f"observation_profile bodies[{index}]")
+        if name in world_bodies:
+            raise ValueError(f'observation_profile bodies repeats "{name}"')
+        world_bodies.append(name)
+    return {"schema": _OBSERVATION_SCHEMA, "bodies": world_bodies}
+
+
+def _observation_profile_value(observation):
+    if not isinstance(observation, dict) or observation.get("schema") != _OBSERVATION_SCHEMA:
+        raise TypeError("declare_observation expects an observation_profile(...) declaration")
+    return observation
+
+
+def declare_observation(observation):
+    """Attach an :func:`observation_profile` to the project declaration.
+
+    Call it after ``project()``; each declared body must exist in the composed
+    scene or the apply fails.
+    """
+    botlab_host.declareProjectObservation(
+        _plan_value(_observation_profile_value(observation), "project observation"),
         _declaration_location(),
     )
 
