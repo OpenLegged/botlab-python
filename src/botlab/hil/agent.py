@@ -21,7 +21,16 @@ import uuid
 from pathlib import Path
 
 from .artifacts import ProjectStore
-from .protocol import MAX_MODEL_BYTES, SHA256, HilError, ports, receive, send, tensors
+from .protocol import (
+    LEASE_RELEASE_CLOSE_CODE,
+    MAX_MODEL_BYTES,
+    SHA256,
+    HilError,
+    ports,
+    receive,
+    send,
+    tensors,
+)
 
 
 class AgentState:
@@ -42,7 +51,8 @@ class AgentState:
     def device(self):
         return {"hostname": platform.node(), "machine": platform.machine(),
                 "protocol": 1, "calls": self.calls, **self.backend.describe(),
-                "capabilities": {"projects": 1, "deploymentVersions": 1}, "loaded": self.loaded,
+                "capabilities": {"projects": 1, "deploymentVersions": 1},
+                "loaded": self.loaded,
                 "state": "running" if self.session else "loaded" if self.loaded else "idle"}
 
     def _release(self):
@@ -282,6 +292,7 @@ def _connect(options) -> int:
     token = os.environ.get("BOTLAB_HIL_TOKEN") or getpass.getpass("Gateway token: ")
     print(f"BotLab HIL agent: dialing out to {options.gateway} as device {options.device}", flush=True)
     while True:
+        released = False
         try:
             stream = connect_gateway(options.gateway, "agent", options.device, token)
         except HilError as exc:
@@ -290,16 +301,23 @@ def _connect(options) -> int:
                 return 1
         else:
             print(f"BotLab HIL agent: registered as {options.device} ({options.backend})", flush=True)
+            dropped = False
             try:
                 serve_stream(state, stream)
             except (OSError, EOFError, ValueError):
-                print("BotLab HIL agent: gateway link dropped", file=sys.stderr, flush=True)
+                dropped = True
             finally:
                 state.disconnect(stream)
+                released = stream.close_code == LEASE_RELEASE_CLOSE_CODE
                 stream.close()
+            if dropped:
+                print("BotLab HIL agent: lease released by the coordinator" if released
+                      else "BotLab HIL agent: gateway link dropped",
+                      file=sys.stderr, flush=True)
         if options.retry_interval <= 0:
             return 0
-        time.sleep(options.retry_interval)
+        if not released:
+            time.sleep(options.retry_interval)
 
 
 def main(argv=None):
@@ -315,7 +333,8 @@ def main(argv=None):
         parser.add_argument("--inference-timeout", type=float, default=3.0,
                             help="Backend inference deadline in seconds")
         parser.add_argument("--retry-interval", type=float, default=5.0,
-                            help="seconds between gateway reconnection attempts; 0 exits on loss")
+                            help="seconds between gateway reconnection attempts; a normal "
+                                 "coordinator release redials immediately; 0 exits on loss")
         options = parser.parse_args(argv[1:])
         return _connect(options)
     if argv[:1] == ["serve"]:

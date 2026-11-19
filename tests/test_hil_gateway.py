@@ -13,6 +13,7 @@ import hashlib
 import json
 import shutil
 import ssl
+import struct
 import subprocess
 import threading
 import time
@@ -23,7 +24,7 @@ import pytest
 from botlab.hil.agent import AgentState, serve_stream
 from botlab.hil.gateway import Gateway
 from botlab.hil.host import HilHost
-from botlab.hil.protocol import HilError, gateway_endpoint, receive, send
+from botlab.hil.protocol import LEASE_RELEASE_CLOSE_CODE, HilError, gateway_endpoint, receive, send
 from botlab.hil.targets import save_target
 from botlab.hil.wsstream import WebSocketStream, connect_gateway
 
@@ -215,6 +216,123 @@ def test_gateway_exclusive_pairing(board, tmp_path):
     finally:
         first.close()
         second.close()
+
+
+def dial_agent(endpoint: str, device: str = DEVICE):
+    """Board-side channel with header auth, mirroring `botlab-agent connect`."""
+    return ws_connect(f"{endpoint}/agent/{device}",
+                      additional_headers=[("Authorization", f"Bearer {TOKEN}")],
+                      open_timeout=5, max_size=64 * 1024 * 1024, legacy=True)
+
+
+class AgentReplies:
+    """Minimal board side for pairing tests: acknowledge every HIL frame with
+    ok, and record how the gateway ended the channel. The thread owns recv for
+    the socket's lifetime — websockets forbids concurrent recv — so tests wait
+    on ``expect`` instead of reading the socket themselves."""
+
+    def __init__(self, raw):
+        self.close = None
+        self.done = threading.Event()
+
+        def run():
+            while True:
+                try:
+                    message = raw.recv(timeout=5)
+                except TimeoutError:
+                    continue
+                except Exception as exc:
+                    frame = getattr(exc, "rcvd", None)
+                    self.close = (getattr(frame, "code", None),
+                                  getattr(frame, "reason", None))
+                    self.done.set()
+                    return
+                if not isinstance(message, bytes):
+                    self.done.set()
+                    return
+                payload = json.dumps({"ok": True, "version": 1}).encode()
+                raw.send(struct.pack("!I", len(payload)) + payload)
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def expect(self, code: int, reason: str) -> None:
+        assert self.done.wait(5), "gateway never closed the agent channel"
+        assert self.close == (code, reason)
+
+
+def test_gateway_coordinator_release_signals_instant_redial(gateway):
+    """A coordinator that completes its close handshake releases the device
+    with LEASE_RELEASE_CLOSE_CODE, so the resident agent redials at once and
+    the next coordinator pairs without waiting out a retry interval."""
+    endpoint, server_gateway = gateway
+    agent = dial_agent(endpoint)
+    board = AgentReplies(agent)
+    wait_registered(server_gateway)
+    coordinator = dial(endpoint)
+    try:
+        send(coordinator, {"op": "hello"})
+        assert receive(coordinator)["ok"] is True
+    finally:
+        coordinator.close()  # clean 1000: the browser's deliberate disconnect
+    board.expect(LEASE_RELEASE_CLOSE_CODE, "coordinator disconnected")
+
+    # The redial is immediate and the next coordinator pairs against it.
+    agent = dial_agent(endpoint)
+    board = AgentReplies(agent)
+    wait_registered(server_gateway)
+    coordinator = dial(endpoint)
+    try:
+        send(coordinator, {"op": "hello"})
+        assert receive(coordinator)["ok"] is True
+    finally:
+        coordinator.close()
+        agent.close()
+
+
+def test_gateway_abnormal_coordinator_drop_keeps_agent_backoff(gateway):
+    """An abrupt coordinator death (no close frame) keeps today's semantics:
+    the agent channel closes 1011 and the resident agent waits out its full
+    retry interval before re-registering."""
+    endpoint, server_gateway = gateway
+    agent = dial_agent(endpoint)
+    board = AgentReplies(agent)
+    wait_registered(server_gateway)
+    coordinator = dial(endpoint)
+    try:
+        send(coordinator, {"op": "hello"})
+        assert receive(coordinator)["ok"] is True
+        coordinator.websocket.socket.close()  # TCP drop: crash, not goodbye
+    finally:
+        coordinator.close()
+    board.expect(1011, "coordinator disconnected")
+    agent.close()
+
+
+def test_wsstream_records_gateway_close_code():
+    """The stream keeps the gateway's close code: the resident agent skips its
+    retry backoff only for a delivered LEASE_RELEASE_CLOSE_CODE, never for an
+    abrupt drop."""
+    def closer(websocket):
+        websocket.close(LEASE_RELEASE_CLOSE_CODE, "coordinator disconnected")
+
+    def dropper(websocket):
+        websocket.socket.close()
+
+    for behavior, expected in ((closer, LEASE_RELEASE_CLOSE_CODE), (dropper, None)):
+        server = ws_serve(behavior, "127.0.0.1", 0)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        stream = WebSocketStream(ws_connect(
+            f"ws://127.0.0.1:{server.socket.getsockname()[1]}",
+            open_timeout=5, legacy=True))
+        try:
+            with pytest.raises(OSError):
+                stream.recv(1)
+            assert stream.close_code == expected
+        finally:
+            stream.close()
+            server.shutdown()
+            thread.join(timeout=5)
 
 
 def test_gateway_bad_token(gateway, tmp_path, monkeypatch):

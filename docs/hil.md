@@ -431,7 +431,10 @@ text frame after that is still a protocol error). One
 agent per device (re-registration takes over, closing the displaced pairing —
 device restart discards stale sessions), one coordinator per device (a second
 gets `device busy`), and either side dropping releases the HIL lease exactly
-like a TCP disconnect.
+like a TCP disconnect: a coordinator that disconnects normally closes the agent
+channel with a release signal, so the resident agent redials at once and the
+next coordinator pairs immediately — only abnormal drops keep the agent's
+`--retry-interval` backoff (default 5 s).
 
 Latency acceptance has two tiers: functional (the model executes correctly
 through the gateway — `tests/test_hil_gateway.py`) and real-time (wall-clock

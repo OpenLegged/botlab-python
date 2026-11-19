@@ -13,6 +13,10 @@ MAX_MODEL_BYTES = 32 * 1024 * 1024
 MAX_FRAME_BYTES = 48 * 1024 * 1024
 MAX_TENSOR_ELEMENTS = 1_000_000
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
+# Gateway→agent lease signal: the agent channel closes with this code when the
+# coordinator disconnects normally, so the resident agent redials at once —
+# the retry interval only guards against hammering a gateway that is down.
+LEASE_RELEASE_CLOSE_CODE = 4000
 
 
 class HilError(ValueError):
