@@ -470,12 +470,14 @@ class Robot:
             raise ValueError("apply_force force must contain exactly 3 numbers")
         botlab_host.applyExternalForce(self.id, name, values)
 
-    def teleport(self, x, y, yaw, *, reset_joints=True):
+    def teleport(self, x, y, yaw, *, z=None, reset_joints=True):
         """Move this robot's root free joint to ``(x, y)`` facing ``yaw``.
 
         The root height is kept from the call's current root z (the preset initial
-        height is a spawn concern, not a mid-run teleport one). ``yaw`` is a
-        world-frame rotation about +z and replaces the root orientation, so roll
+        height is a spawn concern, not a mid-run teleport one); pass ``z`` to
+        re-home the root at an explicit height instead — e.g. standing a fallen
+        robot back up at the preset spawn height. ``yaw`` is a world-frame
+        rotation about +z and replaces the root orientation, so roll
         and pitch are cleared; root linear and angular velocity are zeroed.
         ``reset_joints=True`` writes the preset's initial joint positions and zeros
         joint velocities, giving the standing pose; pass ``False`` to keep the
@@ -489,10 +491,11 @@ class Robot:
         x_value = _finite_number(x, "teleport x")
         y_value = _finite_number(y, "teleport y")
         yaw_value = _finite_number(yaw, "teleport yaw")
+        z_value = None if z is None else _finite_number(z, "teleport z")
         if not isinstance(reset_joints, bool):
             raise ValueError("teleport reset_joints must be a boolean")
         botlab_host.teleportRobot(
-            self.id, x_value, y_value, yaw_value, reset_joints
+            self.id, x_value, y_value, yaw_value, reset_joints, z_value
         )
 
     def velocity_pd(self, target, *, kp=None, effort_limit=None):
@@ -550,6 +553,7 @@ class Robot:
         parameters=None,
         keyboard=None,
         gamepad=None,
+        touch=None,
         magnitude=None,
         ramp_rate=None,
         waypoint=None,
@@ -572,6 +576,19 @@ class Robot:
         which devices carry axis bindings (keyboard / gamepad /
         keyboard-gamepad). A ``ramp_rate`` of zero disables smoothing and
         applies interactive input immediately.
+
+        ``touch=`` carries the touch binding table, the ``bindings`` section a
+        ``config/touch.yaml`` file provides: ``{axis: {increase: {slot, icon,
+        label}, decrease: ...}}``. Touch is the virtual device the presentation
+        page draws on coarse-pointer screens, so unlike keyboard / gamepad its
+        binding entries also carry layout: ``slot`` (left / right cluster),
+        ``icon`` (a whitelisted geometric glyph) and ``label`` (the on-screen
+        button text). Holding a button drives its axis toward the endpoint,
+        releasing falls back; same-axis buttons add up and clamp to [-1, 1].
+        Touch never changes ``commandMode`` (it is the presentation page's
+        stand-in input, orthogonal to the editor's device mode); a plan without
+        ``touch=`` falls back to the built-in drive buttons (forward, turn
+        left / right on the first three axes).
 
         ``gamepad={"slot": N}`` (0..3) binds this command node to gamepad
         slot N: the Nth connected gamepad in ascending ``index`` order.
@@ -617,6 +634,7 @@ class Robot:
         gamepad_section = _command_device_section(
             gamepad, "gamepad", {"bindings", "mappings", "deadzone", "slot"}
         )
+        touch_section = _command_device_section(touch, "touch", {"bindings"})
         # 手柄槽位（多人工程区分同型号手柄）：只随轴绑定生效，热插拔缺位读中立值。
         if gamepad_section is not None and "slot" in gamepad_section:
             slot = gamepad_section["slot"]
@@ -668,9 +686,12 @@ class Robot:
         if gamepad_section is not None and "deadzone" in gamepad_section and "bindings" not in gamepad_section:
             raise ValueError("commands gamepad deadzone requires bindings (mappings read no sticks)")
         # commandMode 由设备绑定推出：只有带轴绑定的设备算连续输入源（keyboard /
-        # gamepad / keyboard-gamepad）；纯事件映射不改模式，向量保持 static。
+        # gamepad / keyboard-gamepad）；纯事件映射不改模式，向量保持 static。触控是
+        # 发布页的虚拟设备，不改 commandMode（与编辑器设备模式正交），但同样驱动
+        # 命令轴：magnitude 轴的「有设备能推动」校验把 touch 算进去。
         has_keyboard_axes = keyboard_section is not None and "bindings" in keyboard_section
         has_gamepad_axes = gamepad_section is not None and "bindings" in gamepad_section
+        has_touch_axes = touch_section is not None and "bindings" in touch_section
         if has_keyboard_axes and has_gamepad_axes:
             input_mode = "keyboard-gamepad"
         elif has_keyboard_axes:
@@ -700,6 +721,11 @@ class Robot:
             data["gamepadBindings"] = _gamepad_bindings_data(
                 gamepad_section["bindings"], names, constant_axes, bounds,
                 "commands gamepad.bindings",
+            )
+        if touch_section is not None and "bindings" in touch_section:
+            data["touchBindings"] = _touch_bindings_data(
+                touch_section["bindings"], names, constant_axes, bounds,
+                "commands touch.bindings",
             )
         if gamepad_section is not None and "deadzone" in gamepad_section:
             deadzone = gamepad_section["deadzone"]
@@ -749,10 +775,10 @@ class Robot:
                 )
             if len(set(magnitude_names)) != len(magnitude_names):
                 raise ValueError("commands magnitude has duplicate names")
-            if input_mode == "static":
+            if input_mode == "static" and not has_touch_axes:
                 raise ValueError(
                     "commands magnitude requires interactive input_mode "
-                    "(keyboard, gamepad, or keyboard-gamepad)"
+                    "(keyboard, gamepad, or keyboard-gamepad) or touch bindings"
                 )
             magnitude_set = set(magnitude_names)
             data["magnitude"] = [name in magnitude_set for name in names]
@@ -905,6 +931,64 @@ def _gamepad_bindings_data(bindings, names, constant_axes, bounds, label):
         if not isinstance(invert, bool):
             raise ValueError(f"{label} {raw_axis!r}.invert must be a bool")
         normalized_bindings[axis] = {"stick": stick, "axis": stick_axis, "invert": invert}
+    return normalized_bindings
+
+
+# 触控按钮的布局契约（plan 层，与具体策略无关）：两个集群槽 + 几何方向图标白名单。
+# 图标是纯几何词（不预设驾驶语义——语义由按钮 label 表达）。
+_TOUCH_BUTTON_SLOTS = frozenset({"left", "right"})
+_TOUCH_BUTTON_ICONS = frozenset({"chevrons-up", "chevrons-down", "chevron-left", "chevron-right"})
+
+
+def _touch_button_data(button, label):
+    """One touch button: ``{slot, icon, label}`` -- layout plus display text."""
+    if not isinstance(button, dict):
+        raise TypeError(f"{label} must be a mapping with slot, icon, label")
+    unknown = set(button) - {"slot", "icon", "label"}
+    if unknown:
+        raise ValueError(f"{label} has unknown fields {sorted(unknown)}")
+    slot = button.get("slot")
+    if slot not in _TOUCH_BUTTON_SLOTS:
+        raise ValueError(f"{label}.slot must be one of {sorted(_TOUCH_BUTTON_SLOTS)}")
+    icon = button.get("icon")
+    if icon not in _TOUCH_BUTTON_ICONS:
+        raise ValueError(f"{label}.icon must be one of {sorted(_TOUCH_BUTTON_ICONS)}")
+    if "label" not in button:
+        raise ValueError(f"{label} requires label (the on-screen button text)")
+    return {"slot": slot, "icon": icon, "label": _localized_text(button["label"], f"{label}.label")}
+
+
+def _touch_bindings_data(bindings, names, constant_axes, bounds, label):
+    """Touch binding table: ``{axis: {increase: {slot, icon, label}, decrease: ...}}``.
+
+    Touch is the virtual device the presentation page draws, so each entry
+    carries layout (slot / icon) next to its display label. Holding a button
+    drives its axis toward the endpoint, releasing falls back; same-axis
+    buttons add up, so one axis may bind both directions.
+    """
+    if not isinstance(bindings, dict) or not bindings:
+        raise ValueError(f"{label} must be a non-empty mapping")
+    if not all(bound is not None for bound in bounds):
+        missing = [name for name, bound in zip(names, bounds) if bound is None]
+        raise ValueError(f"{label} require parameter ranges for {missing}")
+    normalized_bindings = {}
+    for raw_axis, binding in bindings.items():
+        axis = _resolve_command_axis(raw_axis, names, constant_axes, label)
+        if not isinstance(binding, dict) or not binding:
+            raise ValueError(f"{label} {raw_axis!r} must be a non-empty mapping")
+        unknown = set(binding) - {"increase", "decrease"}
+        if unknown:
+            raise ValueError(f"{label} {raw_axis!r} has unknown fields {sorted(unknown)}")
+        normalized = {}
+        for direction in ("increase", "decrease"):
+            if direction not in binding:
+                continue
+            normalized[direction] = _touch_button_data(
+                binding[direction], f"{label} {raw_axis!r}.{direction}"
+            )
+        if not normalized:
+            raise ValueError(f"{label} {raw_axis!r} requires increase or decrease")
+        normalized_bindings[axis] = normalized
     return normalized_bindings
 
 
