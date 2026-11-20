@@ -493,7 +493,7 @@ class ProjectStore:
 
     def commit(self, staging_id, owner):
         """Turn a complete staging into an immutable release and select it."""
-        record = self._staging_record(staging_id, owner)
+        self._staging_record(staging_id, owner)
         staging = _regular(self.staging / staging_id)
         manifest = validate_manifest(json.loads((staging / "manifest.json").read_text()))
         for entry in resources_of(manifest):
