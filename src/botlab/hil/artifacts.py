@@ -454,11 +454,15 @@ class ProjectStore:
             self.manifest(manifest["project"]["id"], manifest["build_id"], verify_files=True)
             self._repair_metadata(manifest["project"]["id"], manifest["build_id"], manifest)
             return {"already_deployed": True, "project": self.summary(manifest["project"]["id"])}
-        missing = []
+        missing, listed = [], set()
         for entry in resources_of(manifest):
-            shared = self.object_path(entry["sha256"])
+            digest = entry["sha256"]
+            if digest in listed:
+                continue
+            listed.add(digest)
+            shared = self.object_path(digest)
             if not shared.is_file() or shared.stat().st_size != entry["size"]:
-                missing.append({"sha256": entry["sha256"], "size": entry["size"]})
+                missing.append({"sha256": digest, "size": entry["size"]})
         staging_id = uuid.uuid4().hex
         staging = _regular(self.staging / staging_id)
         staging.mkdir()
@@ -475,6 +479,11 @@ class ProjectStore:
         if entry is None:
             raise HilError("Blob is not declared by the staged manifest")
         digest = _digest(sha256)
+        # Duplicate-content resources or a re-driven client may re-put a blob
+        # that already completed into the store; answer idempotently.
+        shared = self.object_path(digest)
+        if shared.is_file() and shared.stat().st_size == entry["size"]:
+            return {"received": entry["size"], "complete": True}
         done = received.get(digest, 0) + len(content)
         if done > entry["size"]:
             raise HilError("Blob chunk overflows the declared size")
@@ -487,8 +496,12 @@ class ProjectStore:
         if done < entry["size"]:
             return {"received": done, "complete": False}
         if hashlib.sha256(part.read_bytes()).hexdigest() != digest:
+            # A corrupt final chunk must not wedge the staging: drop the part
+            # and its progress so the client can upload the blob from scratch.
+            part.unlink()
+            received[digest] = 0
             raise HilError("Blob SHA-256 verification failed")
-        os.replace(part, self.object_path(digest))
+        os.replace(part, shared)
         return {"received": done, "complete": True}
 
     def commit(self, staging_id, owner):
@@ -514,6 +527,7 @@ class ProjectStore:
         self._staging_record(staging_id, owner)
         shutil.rmtree(_regular(self.staging / staging_id))
         self.stagings.pop(staging_id, None)
+        self._collect_objects()
         return {"cancelled": True}
 
     def cancel_stagings(self, owner):
@@ -521,6 +535,7 @@ class ProjectStore:
             if record["owner"] is owner:
                 shutil.rmtree(_regular(self.staging / staging_id), ignore_errors=True)
                 self.stagings.pop(staging_id, None)
+                self._collect_objects()
 
     def _staging_record(self, staging_id, owner):
         if not isinstance(staging_id, str) or not STAGING_ID.fullmatch(staging_id):
@@ -625,8 +640,10 @@ class ProjectStore:
         return digest in self._referenced_shas()
 
     def _collect_objects(self):
-        """Delete shared blobs no remaining release references."""
+        """Delete shared blobs neither a release nor an active staging references."""
         referenced = self._referenced_shas()
+        for record in self.stagings.values():
+            referenced.update(item["sha256"] for item in resources_of(record["manifest"]))
         for blob in _safe_iterdir(self.objects):
             if blob.is_file() and blob.suffix == ".bin" and blob.stem not in referenced:
                 blob.unlink()

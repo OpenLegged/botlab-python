@@ -543,6 +543,59 @@ def test_staged_deploy_rejects_oversized_and_foreign_uploads(state):
         state.dispatch(owner, {"op": "projects.commit", "staging": reply["staging"]})
 
 
+def test_staged_deploy_serves_duplicate_content_resources(state):
+    owner = object()
+    scene = b"<mujoco/>"
+    manifest, contents = resource_artifact(scene=scene)
+    digest = hashlib.sha256(scene).hexdigest()
+    # A second resource with identical content must not wedge the staging.
+    manifest["resources"].append(
+        {"kind": "scene", "id": "terrain-copy", "sha256": digest, "path": f"blobs/{digest}",
+         "size": len(scene), "config": {}})
+    manifest["resources"].sort(key=lambda item: (item["kind"], item["id"]))
+    manifest["build_id"] = build_digest(manifest)
+    reply = state.dispatch(owner, {"op": "projects.stage", "manifest": manifest})
+    assert len(reply["missing"]) == 2  # the duplicate shares the scene blob
+    assert staged_deploy(state, owner, manifest, contents)["already_deployed"] is False
+    assert len(list(state.store.objects.glob("*.bin"))) == 2
+
+
+def test_staged_deploy_resumes_after_corrupt_final_chunk(state):
+    owner = object()
+    manifest, contents = resource_artifact()
+    scene = b"<mujoco/>"
+    digest = hashlib.sha256(scene).hexdigest()
+    reply = state.dispatch(owner, {"op": "projects.stage", "manifest": manifest})
+    staging = reply["staging"]
+    # A full-size chunk with wrong bytes fills the part, then fails verification.
+    with pytest.raises(HilError, match="verification failed"):
+        state.dispatch(owner, {"op": "blob.put", "staging": staging, "sha256": digest,
+                               "data": base64.b64encode(b"#" * len(scene)).decode()})
+    # The staging survives: both blobs upload and the same staging commits.
+    for sha256, content in contents.items():
+        for offset in range(0, len(content), 7):
+            state.dispatch(owner, {"op": "blob.put", "staging": staging, "sha256": sha256,
+                                   "data": base64.b64encode(content[offset:offset + 7]).decode()})
+    committed = state.dispatch(owner, {"op": "projects.commit", "staging": staging})
+    assert committed["already_deployed"] is False
+
+
+def test_cancel_sweeps_unreferenced_blobs_only(state):
+    owner = object()
+    staged_deploy(state, owner, *resource_artifact())
+    revised, _ = resource_artifact(revision="second", scene=b"<mujoco camp/>")
+    reply = state.dispatch(owner, {"op": "projects.stage", "manifest": revised})
+    camp = b"<mujoco camp/>"
+    for offset in range(0, len(camp), 7):
+        state.dispatch(owner, {"op": "blob.put", "staging": reply["staging"],
+                               "sha256": hashlib.sha256(camp).hexdigest(),
+                               "data": base64.b64encode(camp[offset:offset + 7]).decode()})
+    state.dispatch(owner, {"op": "projects.cancel", "staging": reply["staging"]})
+    # The cancelled camp blob is gone; blobs the release references survive.
+    kept = {blob.stem for blob in state.store.objects.glob("*.bin")}
+    assert kept == {hashlib.sha256(MODEL).hexdigest(), hashlib.sha256(b"<mujoco/>").hexdigest()}
+
+
 def test_remove_collects_unreferenced_blobs_only(state):
     owner = object()
     first, first_contents = resource_artifact()
