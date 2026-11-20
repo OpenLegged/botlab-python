@@ -20,13 +20,17 @@ class WebSocketStream:
 
     ``sendall`` sends exactly one binary message; ``recv`` serves bytes from an
     internal buffer refilled one message at a time, so partial reads behave
-    like a stream socket for ``protocol.receive``.
+    like a stream socket for ``protocol.receive``. ``close_code`` records the
+    gateway's delivered close code once the channel ends (``None`` before that
+    and when no close frame arrived), so the resident agent can tell a
+    delivered lease signal from an abrupt drop.
     """
 
     def __init__(self, websocket):
         self.websocket = websocket
         self._buffer = b""
         self._timeout: float | None = None
+        self.close_code: int | None = None
 
     def settimeout(self, timeout):
         self._timeout = timeout
@@ -44,6 +48,10 @@ class WebSocketStream:
             except TimeoutError:
                 raise
             except Exception as exc:
+                # `rcvd.code` (not the deprecated ConnectionClosed.code) is
+                # the delivered close code, or None when no frame arrived.
+                close = getattr(exc, "rcvd", None)
+                self.close_code = getattr(close, "code", None)
                 raise OSError(_describe(exc)) from exc
             if not isinstance(message, (bytes, bytearray)):
                 raise OSError("Gateway channel received a non-binary WebSocket frame")

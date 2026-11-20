@@ -56,6 +56,12 @@ CLI 的错误全部是硬失败：缺什么、哪条契约破了、字段名是�
 | `failed SHA-256 integrity` | 传输损坏 | 检查代理是否改写字节（gzip 透明解压等） |
 | 仿真黑屏 + 控制台 WebGL 报错 | 浏览器无硬件 WebGL | 换 Chrome/Edge，查 `chrome://gpu` |
 
+## HIL 部署期（网关部署/装载/会话）
+
+| 报错关键词 | 原因 | 修复 |
+|-----------|------|------|
+| `HIL requires static, positive tensor dimensions` | 模型输入/输出带符号维（训练侧 `dynamic_axes` 导出的 `batch`）；本地 ORT 与浏览器推理都不报错，部署装载/首帧推理才暴露 | 把维度声明钉成静态正整数（batch=1），只改元数据不动权重；见 `onnx-export.md` 第 4 条 |
+
 ## 仍然报错时
 
 1. `botlab validate` 单独跑，拿到最早的失败点（错误按声明顺序抛出，修第一个）。

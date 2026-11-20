@@ -20,8 +20,18 @@ import time
 import uuid
 from pathlib import Path
 
-from .artifacts import ProjectStore
-from .protocol import MAX_MODEL_BYTES, SHA256, HilError, ports, receive, send, tensors
+from .artifacts import ProjectStore, resources_of
+from .protocol import (
+    LEASE_RELEASE_CLOSE_CODE,
+    MAX_CHUNK_BYTES,
+    MAX_MODEL_BYTES,
+    SHA256,
+    HilError,
+    ports,
+    receive,
+    send,
+    tensors,
+)
 
 
 class AgentState:
@@ -42,7 +52,8 @@ class AgentState:
     def device(self):
         return {"hostname": platform.node(), "machine": platform.machine(),
                 "protocol": 1, "calls": self.calls, **self.backend.describe(),
-                "capabilities": {"projects": 1, "deploymentVersions": 1}, "loaded": self.loaded,
+                "capabilities": {"projects": 1, "deploymentVersions": 1, "stagedDeploy": 1},
+                "loaded": self.loaded,
                 "state": "running" if self.session else "loaded" if self.loaded else "idle"}
 
     def _release(self):
@@ -70,6 +81,7 @@ class AgentState:
                 self._release()
             if self.project_owner is owner:
                 self.loaded = self.project_owner = None
+            self.store.cancel_stagings(owner)
 
     def dispatch(self, owner, request):
         if request.get("op") == "infer":
@@ -84,7 +96,9 @@ class AgentState:
                     if self.loaded and project["id"] == self.loaded["project_id"]:
                         project["state"] = "running" if self.session else "loaded"
                 return {"projects": projects, "loaded": self.loaded}
-            if isinstance(op, str) and op.startswith("projects."):
+            if op == "blob.get":
+                return self._blob_get(request)
+            if isinstance(op, str) and op.startswith(("projects.", "blob.")):
                 return self._project_operation(owner, request)
             if op == "start":
                 if self.owner is not None:
@@ -121,13 +135,32 @@ class AgentState:
             if manifest.get("backend") != backend:
                 raise HilError(f"Deployment backend does not match target backend {backend}")
             return self.store.deploy(request.get("artifact"))
+        if op == "projects.stage":
+            backend = self.backend.describe().get("backend")
+            manifest = request.get("manifest")
+            if not isinstance(manifest, dict) or manifest.get("backend") != backend:
+                raise HilError(f"Deployment backend does not match target backend {backend}")
+            return self.store.stage(manifest, owner)
+        if op == "blob.put":
+            staging, digest, encoded = request.get("staging"), request.get("sha256"), request.get("data")
+            if not isinstance(encoded, str) or len(encoded) > ((MAX_CHUNK_BYTES + 2) // 3) * 4:
+                raise HilError("Blob chunk must be base64 within the chunk limit")
+            try:
+                content = base64.b64decode(encoded, validate=True)
+            except ValueError as exc:
+                raise HilError("Invalid blob chunk base64") from exc
+            return self.store.put_blob(staging, digest, content, owner)
+        if op == "projects.commit":
+            return self.store.commit(request.get("staging"), owner)
+        if op == "projects.cancel":
+            return self.store.cancel(request.get("staging"), owner)
         if op == "projects.load":
             manifest = self.store.manifest(request.get("project_id"), request.get("build_id"),
                                            verify_files=True)
             if manifest["backend"] != self.backend.describe().get("backend"):
                 raise HilError("Deployment backend does not match target backend")
             selection = {"project_id": manifest["project"]["id"], "build_id": manifest["build_id"],
-                         "name": manifest["project"]["name"], "models": manifest["models"],
+                         "name": manifest["project"]["name"], "resources": resources_of(manifest),
                          "project_digest": manifest["project_digest"]}
             self.store.select(selection["project_id"], selection["build_id"])
             self.loaded, self.project_owner = selection, owner
@@ -171,6 +204,14 @@ class AgentState:
             return {"session": session, "seq": seq, "outputs": result,
                     "inference_ms": elapsed, "calls": self.calls}
 
+    def _blob_get(self, request):
+        digest, offset, length = request.get("sha256"), request.get("offset", 0), request.get("length")
+        if type(length) is int and length > MAX_CHUNK_BYTES:
+            raise HilError(f"Blob reads are capped at {MAX_CHUNK_BYTES} bytes per request")
+        result = self.store.read_blob(digest, offset, length)
+        return {"sha256": digest, "total": result["total"], "offset": offset,
+                "data": base64.b64encode(result["data"]).decode("ascii")}
+
     def _load(self, request):
         digest, encoded = request.get("sha256"), request.get("data")
         if not isinstance(digest, str) or not SHA256.fullmatch(digest):
@@ -181,11 +222,12 @@ class AgentState:
         if len(self.models) >= 32:
             raise HilError("A session may load at most 32 models")
         if self.loaded:
-            entry = next((item for item in self.loaded["models"] if item["sha256"] == digest), None)
+            entry = next((item for item in self.loaded["resources"] if item["sha256"] == digest), None)
             if entry is None:
                 raise HilError("Model is not part of the loaded deployment; build and deploy this project again")
             self.store.manifest(self.loaded["project_id"], self.loaded["build_id"], verify_files=True)
-            path = self.store.release_path(self.loaded["project_id"], self.loaded["build_id"]) / entry["path"]
+            release = self.store.release_path(self.loaded["project_id"], self.loaded["build_id"])
+            path = self.store.blob_path(entry, release)
             return self._load_path(digest, path)
         if not isinstance(encoded, str) or len(encoded) > ((MAX_MODEL_BYTES + 2) // 3) * 4:
             raise HilError("Model exceeds the 32 MiB limit")
@@ -247,11 +289,14 @@ def serve_stream(state: AgentState, stream) -> None:
             result = state.dispatch(stream, message)
             send(stream, {"ok": True, **result})
         except Exception as exc:
-            # Selection validates its candidate before changing ownership.
-            # A stale or invalid candidate can therefore be rejected
-            # without unloading the previously selected project. All
-            # other execution/contract failures terminate the lease.
-            preserved = message.get("op") == "projects.load" and isinstance(exc, HilError)
+            # Management ops validate their candidates before touching ownership
+            # (selection before lease swap, staging before blob writes), so a
+            # rejected candidate is recoverable without unloading the current
+            # selection or dropping the link. All other execution/contract
+            # failures terminate the lease.
+            preserved = isinstance(message.get("op"), str) and any(
+                message["op"].startswith(prefix) for prefix in ("projects.", "blob.")
+            ) and isinstance(exc, HilError)
             send(stream, {"ok": False, "error": str(exc),
                           **({"lease_preserved": True} if preserved else {})})
             if not preserved:
@@ -282,6 +327,7 @@ def _connect(options) -> int:
     token = os.environ.get("BOTLAB_HIL_TOKEN") or getpass.getpass("Gateway token: ")
     print(f"BotLab HIL agent: dialing out to {options.gateway} as device {options.device}", flush=True)
     while True:
+        released = False
         try:
             stream = connect_gateway(options.gateway, "agent", options.device, token)
         except HilError as exc:
@@ -290,16 +336,23 @@ def _connect(options) -> int:
                 return 1
         else:
             print(f"BotLab HIL agent: registered as {options.device} ({options.backend})", flush=True)
+            dropped = False
             try:
                 serve_stream(state, stream)
             except (OSError, EOFError, ValueError):
-                print("BotLab HIL agent: gateway link dropped", file=sys.stderr, flush=True)
+                dropped = True
             finally:
                 state.disconnect(stream)
+                released = stream.close_code == LEASE_RELEASE_CLOSE_CODE
                 stream.close()
+            if dropped:
+                print("BotLab HIL agent: lease released by the coordinator" if released
+                      else "BotLab HIL agent: gateway link dropped",
+                      file=sys.stderr, flush=True)
         if options.retry_interval <= 0:
             return 0
-        time.sleep(options.retry_interval)
+        if not released:
+            time.sleep(options.retry_interval)
 
 
 def main(argv=None):
@@ -315,7 +368,8 @@ def main(argv=None):
         parser.add_argument("--inference-timeout", type=float, default=3.0,
                             help="Backend inference deadline in seconds")
         parser.add_argument("--retry-interval", type=float, default=5.0,
-                            help="seconds between gateway reconnection attempts; 0 exits on loss")
+                            help="seconds between gateway reconnection attempts; a normal "
+                                 "coordinator release redials immediately; 0 exits on loss")
         options = parser.parse_args(argv[1:])
         return _connect(options)
     if argv[:1] == ["serve"]:

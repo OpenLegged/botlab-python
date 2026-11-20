@@ -431,7 +431,10 @@ text frame after that is still a protocol error). One
 agent per device (re-registration takes over, closing the displaced pairing —
 device restart discards stale sessions), one coordinator per device (a second
 gets `device busy`), and either side dropping releases the HIL lease exactly
-like a TCP disconnect.
+like a TCP disconnect: a coordinator that disconnects normally closes the agent
+channel with a release signal, so the resident agent redials at once and the
+next coordinator pairs immediately — only abnormal drops keep the agent's
+`--retry-interval` backoff (default 5 s).
 
 Latency acceptance has two tiers: functional (the model executes correctly
 through the gateway — `tests/test_hil_gateway.py`) and real-time (wall-clock
@@ -456,9 +459,13 @@ local bridge uses a per-process token plus Host/Origin validation.
   + SSH + compatible ONNX Runtime CPU wheels. No MCU/RTOS support or OS flashing.
 - Static positive tensor dimensions, float32, named multi-input/output models.
   Dynamic shapes, rank-zero graph tensors and ONNX external weight files are
-  unsupported. At most 32 model declarations and 32 MiB of unique model data per
-  deployment; aggregate project storage is limited to 512 MiB. The legacy model
-  cache has a separate 256 MiB limit.
+  unsupported. A dynamic `batch` axis from training-side exports runs fine under
+  plain ONNX Runtime and the browser engine, then fails HIL deployment with
+  `HIL requires static, positive tensor dimensions`; pin the axis when exporting
+  (see `onnx-export.md`, item 4). At most 32 model declarations per deployment;
+  per-resource and aggregate byte totals are uncapped by design — blobs upload
+  in bounded chunks. The legacy single-frame deployment keeps its 32 MiB total
+  artifact cap, and the legacy model cache a separate 256 MiB limit.
 - One active owner/session; all projects use the same provisioned runtime
   dependencies. No arbitrary target-side project Python or `requirements.txt`.
 - No BPU conversion, TensorRT build, full-controller deployment, hardware actuator

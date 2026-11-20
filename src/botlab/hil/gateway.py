@@ -14,7 +14,10 @@ Pairing rules:
 - one agent per device ID: a re-registration takes over and closes the old
   agent connection together with its paired coordinator (device restart);
 - one coordinator per device: a second coordinator is refused ("device busy");
-- either side disappearing closes the other.
+- either side disappearing closes the other: a coordinator that completes its
+  close handshake releases the agent for an immediate redial (close code
+  ``LEASE_RELEASE_CLOSE_CODE``), while an abnormal drop leaves the agent on
+  its retry-interval backoff.
 """
 from __future__ import annotations
 
@@ -27,7 +30,7 @@ import sys
 import threading
 from pathlib import Path
 
-from .protocol import MAX_FRAME_BYTES, HilError
+from .protocol import LEASE_RELEASE_CLOSE_CODE, MAX_FRAME_BYTES, HilError
 
 RECV_TIMEOUT = 600
 AUTH_TIMEOUT = 5
@@ -148,6 +151,10 @@ class Gateway:
                 host.close(1011, "device agent disconnected")
 
     def _device(self, websocket, device):
+        # Imported as late as `serve` in main(): the module stays importable
+        # without the websockets extra.
+        from websockets.exceptions import ConnectionClosedOK
+
         with self.lock:
             agent = self.agents.get(device)
             if agent is None or agent.closed.is_set():
@@ -157,12 +164,18 @@ class Gateway:
                 websocket.close(1008, "device busy")
                 return
             agent.host = websocket
+        released = False
         try:
             while not agent.closed.is_set():
                 try:
                     message = websocket.recv(timeout=RECV_TIMEOUT)
                 except TimeoutError:
                     continue
+                except ConnectionClosedOK:
+                    # A completed close handshake is a deliberate disconnect;
+                    # the agent should redial now, not back off.
+                    released = True
+                    break
                 except Exception:
                     break
                 if isinstance(message, str):
@@ -173,11 +186,17 @@ class Gateway:
                 except Exception:
                     break
         finally:
-            # A leaving coordinator must kill the device link too: the HIL
-            # lease is per agent connection, exactly like the TCP transport.
-            agent.closed.set()
+            # A leaving coordinator still ends the device link — the HIL lease
+            # is per agent connection, exactly like the TCP transport. A clean
+            # goodbye asks the agent to redial at once; anything abnormal
+            # leaves the agent its retry-interval backoff.
+            with self.lock:
+                agent.host = None
+                agent.closed.set()
             websocket.close()
-            agent.websocket.close(1011, "coordinator disconnected")
+            agent.websocket.close(
+                LEASE_RELEASE_CLOSE_CODE if released else 1011,
+                "coordinator disconnected")
 
 
 def _ssl_context(certificate: Path | None, key: Path | None) -> ssl.SSLContext | None:
