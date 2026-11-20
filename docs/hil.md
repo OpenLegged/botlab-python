@@ -459,9 +459,12 @@ local bridge uses a per-process token plus Host/Origin validation.
   + SSH + compatible ONNX Runtime CPU wheels. No MCU/RTOS support or OS flashing.
 - Static positive tensor dimensions, float32, named multi-input/output models.
   Dynamic shapes, rank-zero graph tensors and ONNX external weight files are
-  unsupported. At most 32 model declarations and 32 MiB of unique model data per
-  deployment; aggregate project storage is limited to 512 MiB. The legacy model
-  cache has a separate 256 MiB limit.
+  unsupported. A dynamic `batch` axis from training-side exports runs fine under
+  plain ONNX Runtime and the browser engine, then fails HIL deployment with
+  `HIL requires static, positive tensor dimensions`; pin the axis when exporting
+  (see `onnx-export.md`, item 4). At most 32 model declarations and 32 MiB of
+  unique model data per deployment; aggregate project storage is limited to
+  512 MiB. The legacy model cache has a separate 256 MiB limit.
 - One active owner/session; all projects use the same provisioned runtime
   dependencies. No arbitrary target-side project Python or `requirements.txt`.
 - No BPU conversion, TensorRT build, full-controller deployment, hardware actuator
