@@ -21,7 +21,7 @@ import uuid
 from pathlib import Path
 
 from ._onnx import require_embedded_tensors
-from .protocol import MAX_MODEL_BYTES, SHA256, HilError
+from .protocol import MAX_CHUNK_BYTES, MAX_MODEL_BYTES, SHA256, HilError
 
 PROJECT_ID = re.compile(r"^[A-Za-z0-9_-]{1,80}$")
 RESOURCE_KIND = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
@@ -559,7 +559,9 @@ class ProjectStore:
         if type(offset) is not int or offset < 0 or offset > total:
             raise HilError("Blob offset must be within the blob")
         if length is None:
-            length = total - offset
+            # Unwindowed reads page at the chunk cap so a reply of any blob
+            # size stays inside the wire frame limit after base64.
+            length = min(total - offset, MAX_CHUNK_BYTES)
         if type(length) is not int or length < 0 or offset + length > total:
             raise HilError("Blob length must fit within the blob")
         with path.open("rb") as stream:

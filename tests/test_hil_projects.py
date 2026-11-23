@@ -16,7 +16,7 @@ import pytest
 from botlab._project import STANDARD_PYTHON_MAIN
 from botlab.hil.agent import AgentState
 from botlab.hil.artifacts import ProjectStore, build_digest, build_project, validate_artifact
-from botlab.hil.protocol import HilError
+from botlab.hil.protocol import MAX_CHUNK_BYTES, HilError
 from botlab.hil.worker import WorkerBackend
 
 MODEL = (Path(__file__).parent / "assets" / "identity.onnx").read_bytes()
@@ -621,6 +621,31 @@ def test_blob_get_serves_referenced_windows_only(state):
     assert base64.b64decode(everything["data"]) == MODEL
     with pytest.raises(HilError, match="not referenced"):
         state.dispatch(owner, {"op": "blob.get", "sha256": "b" * 64})
+
+
+def test_blob_get_pages_oversized_blobs_within_frame_limit(state):
+    owner = object()
+    # One chunk past the cap: a single unwindowed read would overflow the wire
+    # frame after base64, so blob.get must split it into pages.
+    scene = os.urandom(MAX_CHUNK_BYTES + 1024 * 1024)
+    manifest, contents = resource_artifact(scene=scene)
+    digest = hashlib.sha256(scene).hexdigest()
+    reply = state.dispatch(owner, {"op": "projects.stage", "manifest": manifest})
+    for sha256, content in contents.items():
+        step = MAX_CHUNK_BYTES if sha256 == digest else 7
+        for offset in range(0, len(content), step):
+            state.dispatch(owner, {"op": "blob.put", "staging": reply["staging"], "sha256": sha256,
+                                   "data": base64.b64encode(content[offset:offset + step]).decode()})
+    state.dispatch(owner, {"op": "projects.commit", "staging": reply["staging"]})
+    pages, offset = [], 0
+    while offset < len(scene):
+        page = state.dispatch(owner, {"op": "blob.get", "sha256": digest, "offset": offset})
+        chunk = base64.b64decode(page["data"])
+        pages.append(chunk)
+        offset += len(chunk)
+    assert page["total"] == len(scene)
+    assert [len(chunk) for chunk in pages] == [MAX_CHUNK_BYTES, len(scene) - MAX_CHUNK_BYTES]
+    assert b"".join(pages) == scene
 
 
 def test_legacy_release_layout_migrates_into_shared_objects(tmp_path):
