@@ -40,7 +40,7 @@ botlab-hil-gateway --host 127.0.0.1 --port 50060 --print-token
 BOTLAB_HIL_TOKEN=<令牌> botlab-agent connect --gateway ws://127.0.0.1:50060 --device my-laptop
 ```
 
-两个进程保持前台运行。注意：`registered` 日志打印在网关校验令牌**之前**——错令牌也会先出现 registered 再 `gateway link dropped`。验证标准：registered 之后链路保持（无 dropped），且 `lsof -iTCP:50060` 显示 ESTABLISHED；最终以浏览器设备窗口点「连接」成功为准。助手可代跑（会话后台任务），但必须告知用户进程随会话结束而停止，并附自行重启的两条终端命令。
+两个进程保持前台运行。注意：`registered` 日志打印在网关校验令牌**之前**——错令牌也会先出现 registered 再 `gateway link dropped`。验证标准：registered 之后链路保持（无 dropped），且 `lsof -iTCP:50060` 显示 ESTABLISHED；最终以浏览器设备窗口点「连接」成功为准。助手可代跑（会话后台任务），但必须告知用户进程随会话结束而停止，并附自行重启的两条终端命令。要长期常驻/开机自启，改用第 4 步的服务安装（`botlab-hil-gateway install` / `botlab-agent install`）。
 
 ## 4. 场景 B 命令（板卡直连本机 + SSH 隧道）
 
@@ -79,23 +79,35 @@ mkdir -p ~/botlab-python && tar xzf cpython-*.tar.gz -C ~/botlab-python --strip-
 # 板卡：离线安装（全程不要求板卡出网）
 ~/botlab-venv/bin/pip install --no-index --find-links ~/botlab-pkgs "botlab-python[gateway,target]"
 
-# 板卡终端 1：网关（只绑板卡回环；未设 BOTLAB_HIL_GATEWAY_TOKEN 时随机生成并由 --print-token 打印）
-~/botlab-venv/bin/botlab-hil-gateway --host 127.0.0.1 --port 50060 --print-token
+# 板卡：一次性安装两个常驻 systemd 用户服务（令牌固定进 0600 环境文件，
+# 重启后自动回来，不再需要板卡终端；卸载用各自的 uninstall 子命令）
+# 令牌 = secrets.token_urlsafe(32)，两条 install 必须用同一令牌：
+#   助手代跑用 env 前缀传入；用户手动跑则省略 env、按提示交互输入（不落 shell 历史）
+BOTLAB_HIL_GATEWAY_TOKEN=<令牌> ~/botlab-venv/bin/botlab-hil-gateway install \
+  --host 127.0.0.1 --port 50060
+BOTLAB_HIL_TOKEN=<令牌> ~/botlab-venv/bin/botlab-agent install \
+  --gateway ws://127.0.0.1:50060 --device <设备ID> --enable-linger
 
-# 板卡终端 2：agent（网关就在板卡上，拨板卡回环）
-BOTLAB_HIL_TOKEN=<令牌> ~/botlab-venv/bin/botlab-agent connect \
-  --gateway ws://127.0.0.1:50060 --device <设备ID>
+# `--enable-linger` 失败时安装器会打印需要的 sudo 命令：原样交给用户执行，
+# 助手不代跑 sudo；未开 linger 时服务仍在，只是要等该用户首次登录才启动。
 
-# 本机终端 3：SSH 隧道（保持运行；断开后重跑同一条命令即可恢复）
+# 本机终端（唯一保留的前台进程）：SSH 隧道，断开后重跑同一条命令即可恢复
 ssh -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 \
   -L 50060:127.0.0.1:50060 <用户>@<板卡地址>
 ```
 
-验证标准：板卡终端 2 出现 `BotLab HIL agent: registered as <id> (onnxruntime)` 且**之后无** `gateway link dropped`（registered 打印在令牌校验之前，错令牌也会先出现）；本机 `lsof -nP -iTCP:50060` 显示 ssh 监听 `127.0.0.1:50060`；最终以浏览器设备窗口点「连接」成功为准。
+验证标准：板卡上 `systemctl --user is-active botlab-hil-gateway.service` 与
+`botlab-agent-*.service`（`systemctl --user list-units 'botlab-*'` 查全名）均为
+`active`；`journalctl --user -u <agent 服务名>` 出现
+`BotLab HIL agent: registered as <id> (onnxruntime)` 且**之后无**
+`gateway link dropped`（registered 打印在令牌校验之前，错令牌也会先出现——
+错令牌时改令牌需先 `uninstall` 再用新令牌重装两个服务）；本机
+`lsof -nP -iTCP:50060` 显示 ssh 监听 `127.0.0.1:50060`；最终以浏览器设备窗口
+点「连接」成功为准。
 
 ## 5. 安全规则
 
-令牌只在用户对话中转述，绝不写入文件、日志或提交；`ws://` 仅限各自主机回环（场景 A 的本机回环、场景 B 的板卡回环），场景 B 的跨机流量只走 SSH 隧道；确需异地 `wss://` 网关时，强令牌一律 `secrets.token_urlsafe(32)`。
+令牌只在用户对话中转述；除服务安装写入的 0600 环境文件（网关 `~/.config/botlab/gateway-token.env`、agent `<root>/agent/gateway-token.env`，卸载即删）外，绝不写入其他文件、日志或提交，也绝不作为命令行参数传递。`ws://` 仅限各自主机回环（场景 A 的本机回环、场景 B 的板卡回环），场景 B 的跨机流量只走 SSH 隧道；确需异地 `wss://` 网关时，强令牌一律 `secrets.token_urlsafe(32)`。
 
 ## 6. 交付
 
