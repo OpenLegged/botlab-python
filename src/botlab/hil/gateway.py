@@ -209,7 +209,85 @@ def _ssl_context(certificate: Path | None, key: Path | None) -> ssl.SSLContext |
     return context
 
 
+GATEWAY_UNIT = "botlab-hil-gateway.service"
+
+
+def _install(options) -> int:
+    """Install the gateway as a systemd user service with a pinned token.
+
+    A service must not generate a fresh random token per restart — that would
+    silently invalidate every enrolled agent — so the token is pinned from
+    BOTLAB_HIL_GATEWAY_TOKEN or an interactive prompt into a 0600 env file.
+    """
+    import getpass
+
+    from .service import check_env_token, install_service
+
+    if bool(options.tls_cert) != bool(options.tls_key):
+        print("Gateway TLS needs both --tls-cert and --tls-key", file=sys.stderr)
+        return 2
+    try:
+        _ssl_context(options.tls_cert, options.tls_key)
+    except (HilError, OSError, ssl.SSLError) as error:
+        print(f"Gateway TLS setup failed: {error}", file=sys.stderr)
+        return 2
+    token = check_env_token("BOTLAB_HIL_GATEWAY_TOKEN",
+                            os.environ.get("BOTLAB_HIL_GATEWAY_TOKEN")
+                            or getpass.getpass("Gateway token to pin: "))
+    exec_argv = [sys.executable, "-m", "botlab.hil.gateway",
+                 "--host", options.host, "--port", str(options.port)]
+    for flag, value in (("--tls-cert", options.tls_cert), ("--tls-key", options.tls_key)):
+        if value is not None:
+            exec_argv += [flag, str(value)]
+    try:
+        summary = install_service(
+            GATEWAY_UNIT, "BotLab HIL device gateway",
+            exec_argv, Path.home() / ".config/botlab/gateway-token.env",
+            {"BOTLAB_HIL_GATEWAY_TOKEN": token}, enable_linger=options.enable_linger)
+    except HilError as exc:
+        print(f"botlab-hil-gateway install: {exc}", file=sys.stderr)
+        return 1
+    print(f"Installed {summary['unit']} with a pinned token ({summary['env_file']}, 0600)")
+    print(f"  unit:  {summary['unit_file']}")
+    print(f"  starts at login; logs: journalctl --user -u {summary['unit']} -f")
+    if summary["autostart"]:
+        print("  autostart at boot: yes (lingering enabled)")
+    else:
+        print("  autostart at boot: no — a user service only starts at login.")
+        print("  to start at boot without a login, run: sudo loginctl enable-linger $USER")
+    return 0 if summary["linger_error"] is None else 1
+
+
+def _uninstall(options) -> int:
+    from .service import uninstall_service
+
+    try:
+        summary = uninstall_service(GATEWAY_UNIT, Path.home() / ".config/botlab/gateway-token.env")
+    except HilError as exc:
+        print(f"botlab-hil-gateway uninstall: {exc}", file=sys.stderr)
+        return 1
+    print(f"Removed {summary['unit']} and {summary['env_file']}")
+    return 0
+
+
 def main(argv=None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv[:1] in (["install"], ["uninstall"]):
+        install = argv[0] == "install"
+        parser = argparse.ArgumentParser(
+            description=("Install" if install else "Remove")
+                      + " the gateway as a systemd user service with a pinned token")
+        parser.add_argument("--host", default="127.0.0.1",
+                            help="bind address (use 0.0.0.0 only behind a TLS reverse proxy)")
+        parser.add_argument("--port", type=int, default=50060)
+        parser.add_argument("--tls-cert", type=Path, help="serve wss:// directly with this certificate")
+        parser.add_argument("--tls-key", type=Path, help="private key matching --tls-cert")
+        if install:
+            parser.add_argument("--enable-linger", action="store_true",
+                                help="also enable user lingering so the service starts at "
+                                     "boot without a login (may need sudo)")
+        options = parser.parse_args(argv[1:])
+        return (_install if install else _uninstall)(options)
     parser = argparse.ArgumentParser(
         description="Relay HIL device traffic for board agents dialing out")
     parser.add_argument("--host", default="127.0.0.1",

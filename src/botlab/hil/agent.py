@@ -355,6 +355,65 @@ def _connect(options) -> int:
             time.sleep(options.retry_interval)
 
 
+def _agent_unit(root: Path) -> str:
+    from .service import unit_hash
+    return f"botlab-agent-{unit_hash(str(root))}.service"
+
+
+def _install(options) -> int:
+    """Install the resident agent as a systemd user service.
+
+    The unit runs `connect` under the installing interpreter with the token in
+    a 0600 EnvironmentFile, so a reboot brings the agent back without a login
+    (with lingering) or at first login (without).
+    """
+    import re
+
+    from .protocol import gateway_endpoint
+    from .service import check_env_token, install_service
+
+    gateway_endpoint(options.gateway)
+    if not re.fullmatch(r"[a-zA-Z0-9_-]{1,64}", options.device):
+        raise HilError("Device ID may only contain letters, digits, _ or - (1-64 chars)")
+    token = check_env_token("BOTLAB_HIL_TOKEN",
+                            os.environ.get("BOTLAB_HIL_TOKEN") or getpass.getpass("Gateway token: "))
+    root = options.root.expanduser().resolve()
+    if root.is_symlink():
+        raise HilError("BotLab storage root must not be a symlink")
+    summary = install_service(
+        _agent_unit(root), f"BotLab HIL gateway agent ({options.device})",
+        [sys.executable, "-m", "botlab.hil.agent", "connect",
+         "--gateway", options.gateway, "--device", options.device,
+         "--root", str(root), "--backend", options.backend],
+        root / "agent" / "gateway-token.env", {"BOTLAB_HIL_TOKEN": token},
+        network_online=True, enable_linger=options.enable_linger)
+    _report_install(summary)
+    return 0 if summary["linger_error"] is None else 1
+
+
+def _report_install(summary: dict) -> None:
+    print(f"Installed {summary['unit']}")
+    print(f"  unit:  {summary['unit_file']}")
+    print(f"  token: {summary['env_file']} (0600)")
+    print(f"  starts at login; logs: journalctl --user -u {summary['unit']} -f")
+    if summary["autostart"]:
+        print("  autostart at boot: yes (lingering enabled)")
+    else:
+        print("  autostart at boot: no — a user service only starts at login.")
+        print("  to start at boot without a login, run: "
+              "sudo loginctl enable-linger $USER")
+
+
+def _uninstall(options) -> int:
+    from .service import uninstall_service
+
+    root = options.root.expanduser().resolve()
+    summary = uninstall_service(_agent_unit(root), root / "agent" / "gateway-token.env")
+    print(f"Removed {summary['unit']} and {summary['env_file']}; "
+          "deployed projects under the root are untouched.")
+    return 0
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv[:1] == ["connect"]:
@@ -372,6 +431,26 @@ def main(argv=None):
                                  "coordinator release redials immediately; 0 exits on loss")
         options = parser.parse_args(argv[1:])
         return _connect(options)
+    if argv[:1] in (["install"], ["uninstall"]):
+        install = argv[0] == "install"
+        parser = argparse.ArgumentParser(
+            description=("Install" if install else "Remove")
+                      + " the resident gateway agent as a systemd user service")
+        if install:
+            parser.add_argument("--gateway", required=True, help="wss:// gateway origin (ws:// loopback only)")
+            parser.add_argument("--device", required=True, help="device ID to register as")
+            parser.add_argument("--backend", default="onnxruntime", help="onnxruntime or module:factory")
+            parser.add_argument("--enable-linger", action="store_true",
+                                help="also enable user lingering so the service starts at "
+                                     "boot without a login (may need sudo)")
+        parser.add_argument("--root", type=Path, default=Path("~/botlab"),
+                            help="Agent and project storage root (keys the unit name)")
+        options = parser.parse_args(argv[1:])
+        try:
+            return (_install if install else _uninstall)(options)
+        except HilError as exc:
+            print(f"botlab-agent {argv[0]}: {exc}", file=sys.stderr)
+            return 1
     if argv[:1] == ["serve"]:
         argv.pop(0)
     parser = argparse.ArgumentParser(description="Serve a BotLab HIL target on a trusted network")
