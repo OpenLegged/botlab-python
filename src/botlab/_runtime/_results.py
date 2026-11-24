@@ -10,6 +10,33 @@ _RESULT_PATH = re.compile(
 )
 
 
+def is_runtime_result_path(path):
+    return isinstance(path, str) and _RESULT_PATH.fullmatch(path) is not None
+
+
+def _reject_json_constant(value):
+    raise ValueError(f"Invalid JSON constant: {value}")
+
+
+def is_runtime_result_file(path, content):
+    """Mirror BotLab runtimeResultFiles.ts when classifying existing files.
+
+    Unmarked or invalid JSON remains input. Writing new results still uses
+    the stricter finite-value validation in _result_document.
+    """
+    if not is_runtime_result_path(path):
+        return False
+    try:
+        document = json.loads(content, parse_constant=_reject_json_constant)
+    except (ValueError, RecursionError):
+        return False
+    return (isinstance(document, dict)
+            and document.get("format") == "botlab.runtime-result"
+            and type(document.get("version")) in (int, float)
+            and document["version"] == 1
+            and "data" in document)
+
+
 def _result_document(content):
     if not isinstance(content, str):
         raise ValueError("[botlab] Runtime result content must be JSON text")
@@ -27,7 +54,7 @@ def _result_document(content):
 
 
 def write_result_file(directory, path, content):
-    if not isinstance(path, str) or _RESULT_PATH.fullmatch(path) is None:
+    if not is_runtime_result_path(path):
         raise ValueError("[botlab] Runtime result path must be results/<name>.json")
     _result_document(content)
     directory = directory.resolve()

@@ -491,3 +491,76 @@ def test_project_digest_pinned_with_browser_publisher():
         "config/parameters.yaml": PARAMETERS_YAML,
     }
     assert python_release_project_digest(manifest, files) == PINNED_DIGEST_HEX
+
+
+@pytest.mark.parametrize("path", [
+    "results/run.1/output.json", "results/botlab/01.2/2-result.json",
+    "results/123/0.json", "results/output.json",
+])
+def test_runtime_result_paths_are_project_text(path):
+    from botlab._project import is_project_text_file
+
+    assert is_project_text_file(path)
+
+
+@pytest.mark.parametrize("path", [
+    "results/run.1/helper.py", "results/run.1/robot.preset.yaml",
+    "results/run.1/readme.md", "results/../escape.json", "results//out.json",
+])
+def test_runtime_result_allowance_preserves_other_path_rules(path):
+    from botlab._project import is_project_text_file
+
+    assert not is_project_text_file(path)
+
+
+def test_runtime_results_do_not_change_release_sources_or_digest(project_dir):
+    from botlab._runtime._results import write_result_file
+
+    original = load_project(project_dir)
+    paths = ["results/output.json", "results/run.1/output.json", "results/botlab/01.2/2-result.json"]
+    for value in (None, {"sample": 2}):
+        for path in paths:
+            content = json.dumps({"format": "botlab.runtime-result", "version": 1, "data": value})
+            write_result_file(project_dir, path, content)
+        loaded = load_project(project_dir)
+        assert loaded.files == original.files
+        assert loaded.project_digest == original.project_digest
+        assert loaded.compiled_plan == original.compiled_plan
+        with zipfile.ZipFile(io.BytesIO(create_release_package(loaded))) as archive:
+            assert not any(name.startswith("project/results/") for name in archive.namelist())
+            config = json.loads(archive.read("release.json"))
+            assert config["project"]["projectDigest"] == original.project_digest
+            assert config["project"]["compiledController"]["projectDigest"] == original.project_digest
+
+
+@pytest.mark.parametrize(("path", "content"), [
+    ("results/run.1/input.json", '{"calibration": 12}'),
+    ("results/output.json", '{broken'),
+    pytest.param("results/output.json", "[" * 10000 + "0" + "]" * 10000, id="deep-input"),
+    ("results/output.json", '{"format":"other","version":1,"data":null}'),
+    ("results/output.json", '{"format":"botlab.runtime-result","version":2,"data":null}'),
+    ("results/output.json", '{"format":"botlab.runtime-result","version":true,"data":null}'),
+    ("results/output.json", '{"format":"botlab.runtime-result","version":1}'),
+    ("results/output.json", '{"format":"botlab.runtime-result","version":1,"data":NaN}'),
+    ("results/output.json", '[{"format":"botlab.runtime-result","version":1,"data":null}]'),
+    ("input.json", '{"format":"botlab.runtime-result","version":1,"data":null}'),
+])
+def test_ordinary_or_invalid_result_json_remains_release_input(project_dir, path, content):
+    target = project_dir / path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(content)
+    loaded = load_project(project_dir)
+    assert loaded.files[path] == content
+    with zipfile.ZipFile(io.BytesIO(create_release_package(loaded))) as archive:
+        assert archive.read(f"project/{path}").decode() == content
+    target.write_text(content + "\n")
+    assert load_project(project_dir).project_digest != loaded.project_digest
+
+
+@pytest.mark.parametrize("data", ["null", "false", "0", "[]", "1e999"])
+def test_result_envelope_classification_matches_browser_json(project_dir, data):
+    target = project_dir / "results/output.json"
+    target.parent.mkdir()
+    # JSON.parse treats 1.0 as version 1 and accepts overflowing numeric literals.
+    target.write_text('{"format":"botlab.runtime-result","version":1.0,"data":' + data + '}')
+    assert "results/output.json" not in load_project(project_dir).files

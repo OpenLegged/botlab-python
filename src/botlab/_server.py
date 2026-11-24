@@ -79,7 +79,8 @@ def local_project_payload(project_dir: Path) -> dict:
     Source classification mirrors the editor's project file tree and the
     release packer: whatever ``is_project_text_file`` accepts (main.py /
     controller.py, presets, nested Python packages, ``config/*.yaml``) is a
-    text source; every other file (MJCF, ONNX, meshes) is a binary asset the
+    text file, including saved runtime results that the release collector
+    excludes from compilation. Every other file (MJCF, ONNX, meshes) is an asset the
     tree shows at its real relative path. Local build noise (dot files,
     ``release.zip``, caches, symlinks) stays out of the payload entirely.
     """
