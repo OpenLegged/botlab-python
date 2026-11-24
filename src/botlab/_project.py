@@ -26,6 +26,7 @@ import yaml
 
 from . import _host
 from ._host import PRESET_FILE_SUFFIX, BotLabError
+from ._runtime._results import is_runtime_result_file, is_runtime_result_path
 
 STANDARD_PYTHON_MAIN = (
     "from botlab import Simulation\n"
@@ -62,7 +63,8 @@ def _is_safe_archive_path(path: str) -> bool:
 #
 # is_project_text_file mirrors the editor's isProjectTextFilePath
 # (src/domain/low-code/projectFilePaths.ts in BotLab): which project files are
-# text declarations shipped in ``files`` and which stay binary assets. The
+# text files shown in the editor and which stay binary assets. Generated
+# results remain editor files but are excluded from compilation/publishing. The
 # browser publish path and this CLI must cut the same file set out of the same
 # project or the release digests diverge — change both sides together.
 
@@ -118,9 +120,12 @@ def _is_text_file_name(name: str) -> bool:
 def is_project_text_file(relative: str) -> bool:
     """Editor isProjectTextFilePath, mirrored: .py/.preset.yaml follow the
     Python module path rules, other text files a looser unicode name rule;
-    assets/ and botlab/ stay out of the text set."""
+    safe results/ JSON paths use the runtime result path contract.
+    assets/ and top-level botlab/ stay out of the text set."""
     if relative.endswith(".py") or relative.endswith(_PRESET_SUFFIX):
         return _is_python_source_path(relative)
+    if is_runtime_result_path(relative):
+        return True
     if not _is_safe_archive_path(relative) or relative == "botlab.project.json":
         return False
     parts = relative.split("/")
@@ -198,8 +203,8 @@ def walk_project_files(project_dir: Path):
     ``release.zip``/``tmp``, ``__pycache__``/``node_modules`` anywhere — so
     VCS metadata, the ``.botlab/`` project identity written between builds,
     and editor scratch never reach classification. The source collector and
-    the local payload server share this walk: whatever the editor sees as
-    text files must be exactly what the release digest covers.
+    the local payload server share this walk. The release source collector
+    additionally excludes marked runtime results from the digest.
     """
     for entry in sorted(project_dir.rglob("*")):
         if entry.is_symlink() or not entry.is_file():
@@ -216,11 +221,12 @@ def walk_project_files(project_dir: Path):
 
 
 def _project_source_files(project_dir: Path) -> dict[str, str]:
-    """Every project text file, collected recursively like the editor does.
+    """Project text inputs, excluding marked runtime results.
 
     ``config/*.yaml`` declarations, nested Python packages and docs travel in
     ``files`` next to main.py/controller.py; classification is
-    is_project_text_file's job.
+    is_project_text_file's job. Result JSON stays on disk and in the editor,
+    but never changes the compiled project or release digest.
     """
     files: dict[str, str] = {}
     for posix, entry in walk_project_files(project_dir):
@@ -232,7 +238,9 @@ def _project_source_files(project_dir: Path) -> dict[str, str]:
                 )
             continue
         if is_project_text_file(posix):
-            files[posix] = entry.read_text(encoding="utf-8")
+            content = entry.read_text(encoding="utf-8")
+            if not is_runtime_result_file(posix, content):
+                files[posix] = content
     if "main.py" not in files:
         raise BotLabError('A BotLab project requires "main.py".')
     if "controller.py" not in files:

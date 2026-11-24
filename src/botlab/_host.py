@@ -814,6 +814,10 @@ updateHeightfield = _runtime_only(
     "updateHeightfield",
     "Scene.update_heightfield() requires the live simulation runtime.",
 )
+writeResult = _runtime_only(
+    "writeResult",
+    "Simulation.write_result() requires an active control step in the live simulation runtime.",
+)
 updateMetrics = _runtime_only(
     "updateMetrics",
     "Metrics updates require the live simulation runtime.",

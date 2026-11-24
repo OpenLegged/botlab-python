@@ -152,3 +152,23 @@ def test_serve_project_requires_exactly_one_release_source(project_dir: Path, tm
             project_dir, tmp_path / "a.zip", "127.0.0.1", 0,
             ui_dir=tmp_path, release_provider=lambda: b"",
         )
+
+
+
+def test_local_project_endpoint_keeps_results_as_text(project_dir, tmp_path):
+    from botlab._runtime._results import write_result_file
+
+    paths = ["results/output.json", "results/run.1/output.json", "results/botlab/01.2/2-result.json"]
+    content = json.dumps({"format": "botlab.runtime-result", "version": 1, "data": {"sample": 2}})
+    for path in paths:
+        write_result_file(project_dir, path, content)
+    ordinary_path = "results/run.1/input.json"
+    (project_dir / ordinary_path).write_text('{"calibration": 12}')
+    with _running_server(project_dir, tmp_path) as base:
+        with urlopen(f"{base}/local-project.json") as response:
+            payload = json.loads(response.read())
+        for path in paths:
+            assert payload["files"][path] == content
+            assert path not in payload["assets"]
+        assert payload["files"][ordinary_path] == '{"calibration": 12}'
+        assert ordinary_path not in payload["assets"]
