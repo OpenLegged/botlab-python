@@ -441,6 +441,10 @@ class ProjectStore:
     def _finish_release(self, staging: Path, manifest):
         project_id, build_id = manifest["project"]["id"], manifest["build_id"]
         release = self.release_path(project_id, build_id)
+        # Another staging may have completed shared blobs while this one still
+        # held partial uploads. Releases contain metadata only, never parts.
+        for part in staging.glob("*.part"):
+            _regular(part).unlink()
         _atomic_json(staging / ".deployment.json", {"created_at": time.time()})
         release.parent.mkdir(parents=True, exist_ok=True)
         os.replace(staging, release)
@@ -482,12 +486,14 @@ class ProjectStore:
         # Duplicate-content resources or a re-driven client may re-put a blob
         # that already completed into the store; answer idempotently.
         shared = self.object_path(digest)
+        part = _regular(self.staging / staging_id / f"{digest}.part")
         if shared.is_file() and shared.stat().st_size == entry["size"]:
+            part.unlink(missing_ok=True)
+            received.pop(digest, None)
             return {"received": entry["size"], "complete": True}
         done = received.get(digest, 0) + len(content)
         if done > entry["size"]:
             raise HilError("Blob chunk overflows the declared size")
-        part = _regular(self.staging / staging_id / f"{digest}.part")
         with part.open("ab") as stream:
             stream.write(content)
             stream.flush()
