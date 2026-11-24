@@ -27,6 +27,7 @@ from .protocol import (
     MAX_MODEL_BYTES,
     SHA256,
     HilError,
+    gateway_endpoint,
     ports,
     receive,
     send,
@@ -369,7 +370,6 @@ def _install(options) -> int:
     """
     import re
 
-    from .protocol import gateway_endpoint
     from .service import check_env_token, install_service
 
     gateway_endpoint(options.gateway)
@@ -377,9 +377,10 @@ def _install(options) -> int:
         raise HilError("Device ID may only contain letters, digits, _ or - (1-64 chars)")
     token = check_env_token("BOTLAB_HIL_TOKEN",
                             os.environ.get("BOTLAB_HIL_TOKEN") or getpass.getpass("Gateway token: "))
-    root = options.root.expanduser().resolve()
-    if root.is_symlink():
-        raise HilError("BotLab storage root must not be a symlink")
+    root = options.root.expanduser().absolute()
+    if any(part.is_symlink() for part in (root, *root.parents)):
+        raise HilError("BotLab storage root must not contain symlinks")
+    root = root.resolve()
     summary = install_service(
         _agent_unit(root), f"BotLab HIL gateway agent ({options.device})",
         [sys.executable, "-m", "botlab.hil.agent", "connect",
@@ -419,7 +420,7 @@ def main(argv=None):
     if argv[:1] == ["connect"]:
         parser = argparse.ArgumentParser(
             description="Dial out to a BotLab HIL gateway and serve the device")
-        parser.add_argument("--gateway", required=True, help="wss:// gateway origin (ws:// loopback only)")
+        parser.add_argument("--gateway", required=True, help="ws:// gateway origin (loopback only)")
         parser.add_argument("--device", required=True, help="device ID to register as")
         parser.add_argument("--root", type=Path, default=Path("~/botlab"), help="Agent and project storage root")
         parser.add_argument("--models-dir", type=Path, help="Legacy model cache (default: ROOT/cache/models)")
@@ -430,6 +431,11 @@ def main(argv=None):
                             help="seconds between gateway reconnection attempts; a normal "
                                  "coordinator release redials immediately; 0 exits on loss")
         options = parser.parse_args(argv[1:])
+        try:
+            options.gateway = gateway_endpoint(options.gateway)
+        except HilError as exc:
+            print(f"botlab-agent connect: {exc}", file=sys.stderr)
+            return 1
         return _connect(options)
     if argv[:1] in (["install"], ["uninstall"]):
         install = argv[0] == "install"
@@ -437,7 +443,7 @@ def main(argv=None):
             description=("Install" if install else "Remove")
                       + " the resident gateway agent as a systemd user service")
         if install:
-            parser.add_argument("--gateway", required=True, help="wss:// gateway origin (ws:// loopback only)")
+            parser.add_argument("--gateway", required=True, help="ws:// gateway origin (loopback only)")
             parser.add_argument("--device", required=True, help="device ID to register as")
             parser.add_argument("--backend", default="onnxruntime", help="onnxruntime or module:factory")
             parser.add_argument("--enable-linger", action="store_true",

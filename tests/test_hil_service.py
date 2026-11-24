@@ -18,7 +18,7 @@ from botlab.hil.agent import main as agent_main
 from botlab.hil.gateway import main as gateway_main
 from botlab.hil.protocol import HilError
 
-GATEWAY = "wss://boards.example.com"
+GATEWAY = "ws://127.0.0.1:50060"
 
 
 class FakeLogin:
@@ -51,6 +51,7 @@ class FakeLogin:
 @pytest.fixture
 def fake(tmp_path, monkeypatch):
     """Isolated HOME + unit directory with a working fake systemctl."""
+    tmp_path = tmp_path.resolve()
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr(service, "UNIT_TARGET", tmp_path / ".config/systemd/user")
     fake = FakeLogin(tmp_path)
@@ -80,13 +81,13 @@ def test_check_env_token_rejects_unsafe_values():
 def test_unit_body_quotes_and_escapes():
     body = service.unit_body(
         "BotLab test", ["/usr/bin/python3", "-m", "botlab.hil.agent", "connect",
-                        "--gateway", "wss://a/b%20c"],
+                        "--gateway", "ws://127.0.0.1/b%20c"],
         Path("/tmp/token dir/env"), network_online=True)
     assert "Description=BotLab test\n" in body
     assert "After=network-online.target\nWants=network-online.target\n" in body
     assert 'EnvironmentFile="/tmp/token dir/env"\n' in body
     assert 'ExecStart="/usr/bin/python3" "-m" "botlab.hil.agent" "connect" ' \
-           '"--gateway" "wss://a/b%%20c"\n' in body
+           '"--gateway" "ws://127.0.0.1/b%%20c"\n' in body
     assert "Restart=on-failure\nRestartSec=3\nKillMode=control-group" in body
     assert body.rstrip().endswith("WantedBy=default.target")
 
@@ -119,6 +120,24 @@ def test_agent_install_rejects_invalid_options(fake, monkeypatch):
     assert agent_main(["install", "--gateway", GATEWAY, "--device", "bad id!",
                        "--root", str(fake.home / "botlab")]) == 1
     assert not (fake.home / "botlab").exists()
+
+
+@pytest.mark.parametrize("symlink_parent", [False, True], ids=["root", "parent"])
+def test_agent_install_rejects_symlink_paths_before_writing(fake, monkeypatch, capsys,
+                                                          symlink_parent):
+    monkeypatch.setenv("BOTLAB_HIL_TOKEN", "token-1")
+    target = fake.home / "target"
+    target.mkdir()
+    alias = fake.home / "alias"
+    alias.symlink_to(target, target_is_directory=True)
+    root = alias / "botlab" if symlink_parent else alias
+
+    assert agent_main(["install", "--gateway", GATEWAY, "--device", "desk-x5",
+                       "--root", str(root)]) == 1
+    assert "symlink" in capsys.readouterr().err
+    assert list(target.iterdir()) == []
+    assert not service.UNIT_TARGET.exists()
+    assert fake.calls == []
 
 
 def test_agent_install_requires_a_token(fake, monkeypatch, capsys):

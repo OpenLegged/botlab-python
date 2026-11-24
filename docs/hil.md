@@ -401,34 +401,41 @@ behavior rather than gaining persistence automatically.
 
 ### Gateway targets (outbound device link)
 
-The board can also dial out to a device gateway, so it never needs an inbound
-port — the shape used for hosted/web HIL. The gateway relays opaque HIL v1
-frames; the protocol, browser UI and acceptance rules are unchanged, and the
-inference path carries no receipts or retry semantics.
+The resident board agent connects to a device gateway on the same board over
+loopback `ws://`. The user's computer reaches that gateway through SSH local
+port forwarding; only SSH needs to be reachable across machines. For a local
+trial, the gateway, agent and browser all run on the same computer. The gateway
+relays opaque HIL v1 frames, and the inference path carries no receipts or
+retry semantics.
 
 ```bash
-# Wherever the gateway runs (loopback dev, or wss:// behind/direct TLS):
+# On the board, foreground trial: bind the gateway to the board loopback.
 botlab-hil-gateway --host 127.0.0.1 --port 50060 --print-token
 # Token via BOTLAB_HIL_GATEWAY_TOKEN; there is no tokenless mode.
 
 # On the board, foreground trial: the resident agent registers and redials
 # after link loss:
 BOTLAB_HIL_TOKEN=<token> botlab-agent connect \
-  --gateway wss://boards.example.com --device rdk-x5-desk \
+  --gateway ws://127.0.0.1:50060 --device rdk-x5-desk \
   --backend onnxruntime --root ~/botlab
 
-# On the host:
-botlab target add desk-x5 --gateway wss://boards.example.com --device rdk-x5-desk
+# On the user's computer, keep this SSH tunnel running in a separate terminal:
+ssh -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 \
+  -L 127.0.0.1:50060:127.0.0.1:50060 <user>@<board>
+
+# In another local terminal, connect through the forwarded loopback endpoint:
+botlab target add desk-x5 --gateway ws://127.0.0.1:50060 --device rdk-x5-desk
 BOTLAB_HIL_TOKEN=<token> botlab run --hil desk-x5
 ```
 
 #### Boot autostart (systemd user service)
 
-Both resident processes install as systemd user services, so a reboot needs
-no manual start and no open terminal:
+Both resident processes install on the board as systemd user services. With
+user lingering enabled, they start after a reboot without an open board
+terminal. The user's computer still needs the SSH tunnel above:
 
 ```bash
-# On the gateway host: pins the token (from BOTLAB_HIL_GATEWAY_TOKEN or a
+# On the board: pins the token (from BOTLAB_HIL_GATEWAY_TOKEN or a
 # prompt) into ~/.config/botlab/gateway-token.env (0600) — a service must not
 # mint a fresh random token per restart, that would invalidate every agent.
 BOTLAB_HIL_GATEWAY_TOKEN=<token> botlab-hil-gateway install \
@@ -438,7 +445,7 @@ BOTLAB_HIL_GATEWAY_TOKEN=<token> botlab-hil-gateway install \
 # <root>/agent/gateway-token.env (0600) and the unit dials out under the
 # installing interpreter.
 BOTLAB_HIL_TOKEN=<token> botlab-agent install \
-  --gateway wss://boards.example.com --device rdk-x5-desk --root ~/botlab \
+  --gateway ws://127.0.0.1:50060 --device rdk-x5-desk --root ~/botlab \
   --enable-linger
 
 botlab-hil-gateway uninstall
@@ -457,9 +464,9 @@ botlab-agent uninstall [--root ~/botlab]
 - Logs go to the journal: `journalctl --user -u <unit> -f`. Uninstall removes
   the unit and the token file; deployed projects under the root remain.
 
-Rules: `ws://` endpoints are loopback-only; remote gateways must be `wss://`
-(private CA via `BOTLAB_HIL_CA_BUNDLE`, verification never disabled). The token
-is never stored in host target settings and never passed as a CLI argument; a
+Rules: gateway listeners and endpoints use loopback `ws://` only. Cross-machine
+traffic passes through SSH local port forwarding. The token is never stored in
+host target settings and never passed as a CLI argument; a
 service install pins it on the machine that runs that service, in a 0600
 EnvironmentFile. Native
 clients send it in the `Authorization` header; browsers, which cannot set

@@ -18,8 +18,8 @@ Confirm in one sentence which situation the user is in; until confirmed, run rea
   over SSH**: gateway + agent both run on the board's loopback; a single `ssh -L` tunnel on the
   user's computer surfaces the gateway on the local loopback, and the browser still connects to
   `ws://127.0.0.1:50060`. Board installs are **always offline** (step 4); the board is never
-  required to reach the internet. Only boards that cannot be reached by direct SSH need the
-  domain-server variant (see `hil.md`, "Gateway targets").
+  required to reach the internet. This workflow requires SSH access; restore that connection
+  before proceeding if it is unavailable.
 
 ## 1. Component check (read-only)
 
@@ -77,8 +77,8 @@ step 4 instead (`botlab-hil-gateway install` / `botlab-agent install`).
 ## 4. Scenario B commands (board on the LAN + SSH tunnel)
 
 Neither `ws://` leg ever leaves its own host's loopback (browser dials the user's loopback, agent
-dials the board loopback); traffic over the cable is encrypted by SSH, so no domain, certificate,
-or `wss://` is needed.
+dials the board loopback); traffic over the cable is encrypted by SSH. HIL device gateways use
+loopback `ws://` only; cross-machine connections use SSH local port forwarding.
 
 **Do the hardware match first**: once SSH works, identify the board —
 `cat /proc/device-tree/model`, `. /etc/os-release && echo "$PRETTY_NAME"` — then check the
@@ -129,7 +129,7 @@ BOTLAB_HIL_TOKEN=<token> ~/botlab-venv/bin/botlab-agent install \
 # Local terminal (the only foreground process left): SSH tunnel, keep it running;
 # if it drops, rerunning the same command restores it
 ssh -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 \
-  -L 50060:127.0.0.1:50060 <user>@<board>
+  -L 127.0.0.1:50060:127.0.0.1:50060 <user>@<board>
 ```
 
 Success criteria: on the board, `systemctl --user is-active botlab-hil-gateway.service` and
@@ -147,8 +147,7 @@ service install writes (gateway `~/.config/botlab/gateway-token.env`, agent
 `<root>/agent/gateway-token.env`, both removed on uninstall), they are never written to any other
 file, log, or commit, and never passed as a command-line argument. `ws://` stays on each host's
 own loopback (the user's loopback in scenario A, the board's loopback in scenario B), and
-scenario B's cross-machine traffic rides only the SSH tunnel; if a remote `wss://` gateway is
-genuinely required, strong tokens always come from `secrets.token_urlsafe(32)`.
+scenario B's cross-machine traffic rides only the SSH tunnel.
 
 ## 6. Handoff
 

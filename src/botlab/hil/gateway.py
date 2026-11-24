@@ -7,8 +7,8 @@ no task table. There is exactly one shared bearer token (operator channel,
 same restricted-credential stance as Control M1) and no tokenless mode; it
 arrives in the ``Authorization`` header or, for browsers that cannot set
 handshake headers, as one leading ``{"type": "gateway-auth", "token": ...}``
-text control frame. ``ws://`` is for loopback development, remote gateways
-must use ``wss://``.
+text control frame. The gateway binds only to loopback; cross-machine clients
+connect through an SSH tunnel to its ``ws://`` endpoint.
 
 Pairing rules:
 - one agent per device ID: a re-registration takes over and closes the old
@@ -25,12 +25,11 @@ import argparse
 import json
 import os
 import secrets
-import ssl
 import sys
 import threading
 from pathlib import Path
 
-from .protocol import LEASE_RELEASE_CLOSE_CODE, MAX_FRAME_BYTES, HilError
+from .protocol import GATEWAY_LOOPBACK_HOSTS, LEASE_RELEASE_CLOSE_CODE, MAX_FRAME_BYTES, HilError
 
 RECV_TIMEOUT = 600
 AUTH_TIMEOUT = 5
@@ -199,16 +198,6 @@ class Gateway:
                 "coordinator disconnected")
 
 
-def _ssl_context(certificate: Path | None, key: Path | None) -> ssl.SSLContext | None:
-    if not certificate and not key:
-        return None
-    if not certificate or not key:
-        raise HilError("Gateway TLS needs both --tls-cert and --tls-key")
-    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    context.load_cert_chain(certificate, key)
-    return context
-
-
 GATEWAY_UNIT = "botlab-hil-gateway.service"
 
 
@@ -223,22 +212,11 @@ def _install(options) -> int:
 
     from .service import check_env_token, install_service
 
-    if bool(options.tls_cert) != bool(options.tls_key):
-        print("Gateway TLS needs both --tls-cert and --tls-key", file=sys.stderr)
-        return 2
-    try:
-        _ssl_context(options.tls_cert, options.tls_key)
-    except (HilError, OSError, ssl.SSLError) as error:
-        print(f"Gateway TLS setup failed: {error}", file=sys.stderr)
-        return 2
     token = check_env_token("BOTLAB_HIL_GATEWAY_TOKEN",
                             os.environ.get("BOTLAB_HIL_GATEWAY_TOKEN")
                             or getpass.getpass("Gateway token to pin: "))
     exec_argv = [sys.executable, "-m", "botlab.hil.gateway",
                  "--host", options.host, "--port", str(options.port)]
-    for flag, value in (("--tls-cert", options.tls_cert), ("--tls-key", options.tls_key)):
-        if value is not None:
-            exec_argv += [flag, str(value)]
     try:
         summary = install_service(
             GATEWAY_UNIT, "BotLab HIL device gateway",
@@ -277,11 +255,9 @@ def main(argv=None) -> int:
         parser = argparse.ArgumentParser(
             description=("Install" if install else "Remove")
                       + " the gateway as a systemd user service with a pinned token")
-        parser.add_argument("--host", default="127.0.0.1",
-                            help="bind address (use 0.0.0.0 only behind a TLS reverse proxy)")
+        parser.add_argument("--host", default="127.0.0.1", choices=GATEWAY_LOOPBACK_HOSTS,
+                            help="loopback bind address; use SSH forwarding for remote clients")
         parser.add_argument("--port", type=int, default=50060)
-        parser.add_argument("--tls-cert", type=Path, help="serve wss:// directly with this certificate")
-        parser.add_argument("--tls-key", type=Path, help="private key matching --tls-cert")
         if install:
             parser.add_argument("--enable-linger", action="store_true",
                                 help="also enable user lingering so the service starts at "
@@ -290,11 +266,9 @@ def main(argv=None) -> int:
         return (_install if install else _uninstall)(options)
     parser = argparse.ArgumentParser(
         description="Relay HIL device traffic for board agents dialing out")
-    parser.add_argument("--host", default="127.0.0.1",
-                        help="bind address (use 0.0.0.0 only behind a TLS reverse proxy)")
+    parser.add_argument("--host", default="127.0.0.1", choices=GATEWAY_LOOPBACK_HOSTS,
+                        help="loopback bind address; use SSH forwarding for remote clients")
     parser.add_argument("--port", type=int, default=50060)
-    parser.add_argument("--tls-cert", type=Path, help="serve wss:// directly with this certificate")
-    parser.add_argument("--tls-key", type=Path, help="private key matching --tls-cert")
     parser.add_argument("--print-token", action="store_true",
                         help="print the shared token at startup (operator channel only)")
     options = parser.parse_args(argv)
@@ -305,21 +279,16 @@ def main(argv=None) -> int:
     token = os.environ.get("BOTLAB_HIL_GATEWAY_TOKEN") or secrets.token_urlsafe(32)
     gateway = Gateway(token)
     try:
-        context = _ssl_context(options.tls_cert, options.tls_key)
-    except (HilError, OSError, ssl.SSLError) as error:
-        print(f"Gateway TLS setup failed: {error}", file=sys.stderr)
-        return 2
-    try:
-        server = serve(gateway.handler, options.host, options.port, ssl=context,
+        server = serve(gateway.handler, options.host, options.port,
                        max_size=MAX_FRAME_BYTES, compression=None,
                        ping_interval=20, ping_timeout=20)
     except OSError as error:
         print(f"Gateway cannot listen on {options.host}:{options.port}: {error}", file=sys.stderr)
         return 2
     port = server.socket.getsockname()[1]
-    scheme = "wss" if context else "ws"
-    print(f"BotLab HIL gateway: {scheme}://{options.host}:{port}", file=sys.stderr, flush=True)
-    print(f"Agent enrollment: botlab-agent connect --gateway {scheme}://{options.host}:{port} "
+    host = f"[{options.host}]" if ":" in options.host else options.host
+    print(f"BotLab HIL gateway: ws://{host}:{port}", file=sys.stderr, flush=True)
+    print(f"Agent enrollment: botlab-agent connect --gateway ws://{host}:{port} "
           f"--device <id>", file=sys.stderr, flush=True)
     if options.print_token:
         print(f"Token: {token}", file=sys.stderr, flush=True)

@@ -14,9 +14,10 @@ Two independent chains, deliberately not merged:
   one-shot CLI / external agent → HTTPS → cloud control service ← outbound
   WSS ← the BotLab page (physics, signal graph, project Python stay in the
   user's browser).
-- **HIL chain** (in-loop inference, separate acceptance): page → device
-  gateway ← outbound WSS ← resident board agent running ONNX. The board still
-  runs an agent; the user's machine runs at most a browser and an optional CLI.
+- **HIL chain** (in-loop inference, separate acceptance): page → local
+  loopback WS endpoint → SSH tunnel → board loopback device gateway ←
+  loopback WS ← resident board agent running ONNX. The user's machine keeps
+  the SSH tunnel running alongside the browser and optional CLI.
 
 ## Version and extension strategy (frozen)
 
@@ -120,8 +121,9 @@ semantics).
 
 HIL inference rides its own chain and inherits **no** Control-command
 semantics: no receipts, no retry, no task table on the inference path. H1
-turns the board agent's inbound TCP listener into an **outbound** link so the
-board never needs an inbound port:
+connects the resident board agent to its local gateway over loopback `ws://`.
+The user's computer forwards that gateway with SSH; only SSH needs to be
+reachable across machines:
 
 - **Gateway** (`botlab-hil-gateway`, `botlab.hil.gateway`): relays opaque HIL
   v1 frames between a coordinator (`/device/<id>`) and a resident agent that
@@ -131,18 +133,18 @@ board never needs an inbound port:
   tokenless mode. Native clients present it in the `Authorization` header;
   browsers cannot set handshake headers, so they send the same credential as
   one leading `{"type": "gateway-auth", "token": ...}` text control frame
-  before the binary relay begins. `ws://` is loopback-dev only; remote gateways
-  are `wss://` (direct via `--tls-cert/--tls-key` or a TLS reverse proxy).
+  before the binary relay begins. The gateway listens on loopback only;
+  cross-machine access uses SSH local port forwarding.
   Compression is off and links dial directly (no ambient system proxy).
-- **Agent** (`botlab-agent connect --gateway wss://… --device <id>`):
+- **Agent** (`botlab-agent connect --gateway ws://127.0.0.1:50060 --device <id>`):
   registers, serves the same dispatch loop as TCP mode, and redials after
   lease termination or link loss (`--retry-interval`, default 5 s). The token
-  arrives via `BOTLAB_HIL_TOKEN` or a hidden prompt — never argv. Private CAs
-  use `BOTLAB_HIL_CA_BUNDLE`; verification is never disabled.
-- **Coordinator** (`transport: "gateway"` targets): `ws://` endpoints stay
-  loopback, `wss://` accepts any host — the same shape as the Control M1
-  endpoint rule (`gateway_endpoint` in `botlab.hil.protocol`). The token is
-  never stored in target settings; the run server reads `BOTLAB_HIL_TOKEN`.
+  arrives via `BOTLAB_HIL_TOKEN` or a hidden prompt — never argv.
+- **Coordinator** (`transport: "gateway"` targets): endpoints accept only
+  loopback `ws://` with an explicit port (`gateway_endpoint` in
+  `botlab.hil.protocol`). For a board, connect to the local end of the SSH
+  tunnel. The token is never stored in target settings; the run server reads
+  `BOTLAB_HIL_TOKEN`.
 - **Pairing semantics**: one agent per device (re-registration takes over and
   closes the displaced pairing — device restart), one coordinator per device
   (a second gets `device busy`), and either side disappearing closes the
@@ -152,8 +154,8 @@ board never needs an inbound port:
 
 **Acceptance is two tiers** (`tests/test_hil_gateway.py` covers the first):
 functional — the model executes correctly through the gateway, exclusive
-pairing, takeover and stale-result rejection, over loopback `ws://` and real
-`wss://` with a generated dev CA; real-time — wall-clock loop rate at the
+pairing, takeover and stale-result rejection over loopback `ws://`, plus
+endpoint restrictions; real-time — wall-clock loop rate at the
 project's `control_hz` (50 Hz → 20 ms budget) measured on real hardware via
 `botlab target bench <name> --model policy.onnx --budget-ms 20`, which
 reports RTT percentiles, effective Hz and a budget verdict. Serial
@@ -170,7 +172,7 @@ tenant routing, and any receipt/retry semantics on the inference path.
 - `tests/test_control_cli.py` — client identity, retry and restart refusal
   semantics (dedup, eviction, control generation, unsafe discovery).
 - `tests/test_hil_gateway.py` — H1 functional tier: relay transparency,
-  exclusive pairing, takeover, stale-session rejection, endpoint rules, TLS.
+  exclusive pairing, takeover, stale-session rejection and loopback endpoint rules.
 - microduck-project `tests/test_control_api.py`, `tests/test_control_service.py`
   — middleware conformance, including extension-surface and frozen-envelope
   rejection tests.

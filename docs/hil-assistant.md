@@ -12,7 +12,7 @@
 用一句话向用户确认处于哪种情况，确认前只做只读检查：
 
 - **A. 本机试跑（无板卡）**：同一台电脑起网关 + agent，浏览器连 `ws://127.0.0.1:50060`。
-- **B. 真实 Linux 板卡（板卡 HIL 需 Python ≥3.11，系统 Python 更旧时传独立 CPython，见第 4 步），网线/局域网连着用户本机且 SSH 可达**：网关 + agent 都跑在板卡回环，本机一条 `ssh -L` 隧道把网关投到本机回环，浏览器仍连 `ws://127.0.0.1:50060`。板卡装包一律**离线装**（第 4 步），不要求板卡出网。异地无法 SSH 直达的板卡才需要域名服务器方案（见 `hil.md`「Gateway targets」）。
+- **B. 真实 Linux 板卡（板卡 HIL 需 Python ≥3.11，系统 Python 更旧时传独立 CPython，见第 4 步），网线/局域网连着用户本机且 SSH 可达**：网关 + agent 都跑在板卡回环，本机一条 `ssh -L` 隧道把网关投到本机回环，浏览器仍连 `ws://127.0.0.1:50060`。板卡装包一律**离线装**（第 4 步），不要求板卡出网。本流程要求 SSH 可达；无法连接时先恢复 SSH 链路。
 
 ## 1. 组件检查（只读）
 
@@ -45,7 +45,7 @@ BOTLAB_HIL_TOKEN=<令牌> botlab-agent connect --gateway ws://127.0.0.1:50060 --
 ## 4. 场景 B 命令（板卡直连本机 + SSH 隧道）
 
 两段 `ws://` 都不离开各自主机回环（浏览器拨本机回环、agent 拨板卡回环），跨网线
-流量由 SSH 加密，因此不需要域名、证书或 `wss://`。
+流量由 SSH 加密。HIL 设备网关只使用回环 `ws://`，跨机器连接统一通过 SSH 本地端口转发。
 
 **先做硬件适配**：SSH 可达后先识别板卡——`cat /proc/device-tree/model`、
 `. /etc/os-release && echo "$PRETTY_NAME"`——再加载匹配的硬件 skill。skill 固定在
@@ -93,7 +93,7 @@ BOTLAB_HIL_TOKEN=<令牌> ~/botlab-venv/bin/botlab-agent install \
 
 # 本机终端（唯一保留的前台进程）：SSH 隧道，断开后重跑同一条命令即可恢复
 ssh -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 \
-  -L 50060:127.0.0.1:50060 <用户>@<板卡地址>
+  -L 127.0.0.1:50060:127.0.0.1:50060 <用户>@<板卡地址>
 ```
 
 验证标准：板卡上 `systemctl --user is-active botlab-hil-gateway.service` 与
@@ -107,7 +107,7 @@ ssh -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 \
 
 ## 5. 安全规则
 
-令牌只在用户对话中转述；除服务安装写入的 0600 环境文件（网关 `~/.config/botlab/gateway-token.env`、agent `<root>/agent/gateway-token.env`，卸载即删）外，绝不写入其他文件、日志或提交，也绝不作为命令行参数传递。`ws://` 仅限各自主机回环（场景 A 的本机回环、场景 B 的板卡回环），场景 B 的跨机流量只走 SSH 隧道；确需异地 `wss://` 网关时，强令牌一律 `secrets.token_urlsafe(32)`。
+令牌只在用户对话中转述；除服务安装写入的 0600 环境文件（网关 `~/.config/botlab/gateway-token.env`、agent `<root>/agent/gateway-token.env`，卸载即删）外，绝不写入其他文件、日志或提交，也绝不作为命令行参数传递。`ws://` 仅限各自主机回环（场景 A 的本机回环、场景 B 的板卡回环），场景 B 的跨机流量只走 SSH 隧道。
 
 ## 6. 交付
 
