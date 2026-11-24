@@ -763,6 +763,25 @@ def registerSubstepObserver(callback):  # noqa: N802
     )
 
 
+# Interactive input queries. The browser bridge owns keyboard and gamepad
+# capture; the native runner has no input devices, so a held key/button reads
+# False and an axis reads neutral. The SDK has already validated the argument
+# shapes (key code, button/axis indices, gamepad slot) before calling here.
+def keyPressed(code):  # noqa: N802
+    del code
+    return False
+
+
+def gamepadPressed(slot, button):  # noqa: N802
+    del slot, button
+    return False
+
+
+def gamepadAxis(slot, axis):  # noqa: N802
+    del slot, axis
+    return 0.0
+
+
 # Runtime calls the SDK makes from a running simulation. With a session
 # installed they delegate 1:1 (the session owns the async shapes — e.g.
 # predictModel returns the coroutine the SDK awaits); without one they keep
@@ -802,6 +821,18 @@ updateMetrics = _runtime_only(
 updateDiagnostics = _runtime_only(
     "updateDiagnostics",
     "Diagnostics updates require the live simulation runtime.",
+)
+updateOverlay = _runtime_only(
+    "updateOverlay",
+    "Overlay updates require the live simulation runtime.",
+)
+updateControlsHud = _runtime_only(
+    "updateControlsHud",
+    "Controls HUD updates require the live simulation runtime.",
+)
+applyExternalForce = _runtime_only(
+    "applyExternalForce",
+    "Robot.apply_force() requires the live simulation runtime; the offline packager never steps.",
 )
 requestReset = _runtime_only(
     "requestReset",
