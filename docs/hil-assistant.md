@@ -7,12 +7,18 @@
 
 **目标**：让浏览器「设备网关」面板连上网关，模型推理下发到目标设备执行。
 
-## 0. 先问场景，再动手
+## 0. 先确认场景与令牌选择，再动手
 
-用一句话向用户确认处于哪种情况，确认前只做只读检查：
+部署前一起确认部署场景和连接令牌的来源：由用户自定义，还是由 AI 随机生成。当前对话中已明确的信息直接采用，不重复询问；未明确的事项必须等待用户答复，期间只做只读检查。部署场景如下：
 
 - **A. 本机试跑（无板卡）**：同一台电脑起网关 + agent，浏览器连 `ws://127.0.0.1:50060`。
-- **B. 真实 Linux 板卡（板卡 HIL 需 Python ≥3.11，系统 Python 更旧时传独立 CPython，见第 4 步），网线/局域网连着用户本机且 SSH 可达**：网关 + agent 都跑在板卡回环，本机一条 `ssh -L` 隧道把网关投到本机回环，浏览器仍连 `ws://127.0.0.1:50060`。板卡装包一律**离线装**（第 4 步），不要求板卡出网。异地无法 SSH 直达的板卡才需要域名服务器方案（见 `hil.md`「Gateway targets」）。
+- **B. 真实 Linux 板卡（板卡 HIL 需 Python ≥3.11，系统 Python 更旧时传独立 CPython，见第 4 步），网线/局域网连着用户本机且 SSH 可达**：网关 + agent 都跑在板卡回环，本机一条 `ssh -L` 隧道把网关投到本机回环，浏览器仍连 `ws://127.0.0.1:50060`。板卡装包一律**离线装**（第 4 步），不要求板卡出网。本流程要求 SSH 可达；无法连接时先恢复 SSH 链路。
+
+令牌选择按用户答复执行：
+
+- **自定义**：使用用户提供的非空令牌；若尚未提供或值为空，继续询问并等待，不自行改成随机生成。
+- **随机生成**：用户选择后，用 `secrets.token_urlsafe(32)` 等安全随机数生成器生成一次。
+- 将选定的同一令牌用于网关的 `BOTLAB_HIL_GATEWAY_TOKEN`、Agent 的 `BOTLAB_HIL_TOKEN` 和浏览器连接；后文的 `<令牌>` 均指这个值。启动时显式传入，不另行生成。
 
 ## 1. 组件检查（只读）
 
@@ -34,8 +40,8 @@
 
 ```bash
 # 启动前确认端口空闲：lsof -nP -iTCP:50060
-# 终端 1（令牌来自 BOTLAB_HIL_GATEWAY_TOKEN，未设则随机生成并由 --print-token 打印）
-botlab-hil-gateway --host 127.0.0.1 --port 50060 --print-token
+# 终端 1（使用第 0 步选定的令牌，由 --print-token 打印供交付）
+BOTLAB_HIL_GATEWAY_TOKEN=<令牌> botlab-hil-gateway --host 127.0.0.1 --port 50060 --print-token
 # 终端 2（省略 BOTLAB_HIL_TOKEN 则 getpass 交互输入，不落 shell 历史）
 BOTLAB_HIL_TOKEN=<令牌> botlab-agent connect --gateway ws://127.0.0.1:50060 --device my-laptop
 ```
@@ -45,7 +51,7 @@ BOTLAB_HIL_TOKEN=<令牌> botlab-agent connect --gateway ws://127.0.0.1:50060 --
 ## 4. 场景 B 命令（板卡直连本机 + SSH 隧道）
 
 两段 `ws://` 都不离开各自主机回环（浏览器拨本机回环、agent 拨板卡回环），跨网线
-流量由 SSH 加密，因此不需要域名、证书或 `wss://`。
+流量由 SSH 加密。HIL 设备网关只使用回环 `ws://`，跨机器连接统一通过 SSH 本地端口转发。
 
 **先做硬件适配**：SSH 可达后先识别板卡——`cat /proc/device-tree/model`、
 `. /etc/os-release && echo "$PRETTY_NAME"`——再加载匹配的硬件 skill。skill 固定在
@@ -79,8 +85,8 @@ mkdir -p ~/botlab-python && tar xzf cpython-*.tar.gz -C ~/botlab-python --strip-
 # 板卡：离线安装（全程不要求板卡出网）
 ~/botlab-venv/bin/pip install --no-index --find-links ~/botlab-pkgs "botlab-python[gateway,target]"
 
-# 板卡终端 1：网关（只绑板卡回环；未设 BOTLAB_HIL_GATEWAY_TOKEN 时随机生成并由 --print-token 打印）
-~/botlab-venv/bin/botlab-hil-gateway --host 127.0.0.1 --port 50060 --print-token
+# 板卡终端 1：网关（只绑板卡回环；使用第 0 步选定的令牌）
+BOTLAB_HIL_GATEWAY_TOKEN=<令牌> ~/botlab-venv/bin/botlab-hil-gateway --host 127.0.0.1 --port 50060 --print-token
 
 # 板卡终端 2：agent（网关就在板卡上，拨板卡回环）
 BOTLAB_HIL_TOKEN=<令牌> ~/botlab-venv/bin/botlab-agent connect \
@@ -88,14 +94,14 @@ BOTLAB_HIL_TOKEN=<令牌> ~/botlab-venv/bin/botlab-agent connect \
 
 # 本机终端 3：SSH 隧道（保持运行；断开后重跑同一条命令即可恢复）
 ssh -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 \
-  -L 50060:127.0.0.1:50060 <用户>@<板卡地址>
+  -L 127.0.0.1:50060:127.0.0.1:50060 <用户>@<板卡地址>
 ```
 
 验证标准：板卡终端 2 出现 `BotLab HIL agent: registered as <id> (onnxruntime)` 且**之后无** `gateway link dropped`（registered 打印在令牌校验之前，错令牌也会先出现）；本机 `lsof -nP -iTCP:50060` 显示 ssh 监听 `127.0.0.1:50060`；最终以浏览器设备窗口点「连接」成功为准。
 
 ## 5. 安全规则
 
-令牌只在用户对话中转述，绝不写入文件、日志或提交；`ws://` 仅限各自主机回环（场景 A 的本机回环、场景 B 的板卡回环），场景 B 的跨机流量只走 SSH 隧道；确需异地 `wss://` 网关时，强令牌一律 `secrets.token_urlsafe(32)`。
+令牌只在用户对话中转述，绝不写入文件、日志或提交；`ws://` 仅限各自主机回环（场景 A 的本机回环、场景 B 的板卡回环），场景 B 的跨机流量只走 SSH 隧道。令牌来源遵守第 0 步的用户选择。
 
 ## 6. 交付
 
