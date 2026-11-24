@@ -66,7 +66,12 @@ class LocalRuntimeSession:
     """
 
     def __init__(self, physics, display=None, models=None, registry=None,
-                 control_hz=50, physics_hz=200, path_resolver=None):
+                 control_hz=50, physics_hz=200, path_resolver=None, project_directory=None):
+        from pathlib import Path
+
+        self._project_directory = (
+            Path(project_directory).resolve() if project_directory is not None else None
+        )
         self._physics = physics
         self._display = display
         self._models = models
@@ -491,6 +496,15 @@ class LocalRuntimeSession:
     def updateHeightfield(self, terrain_id, heights):
         return self._physics.update_heightfield(terrain_id, heights)
 
+    def writeResult(self, path, content):
+        if self._closed or not (self._custom_step_active or self._in_plan_step):
+            raise RuntimeError("[botlab] write_result requires an active control step")
+        if self._project_directory is None:
+            raise RuntimeError("[botlab] write_result requires the session's project directory")
+        from ._results import write_result_file
+
+        write_result_file(self._project_directory, path, content)
+
     def updateMetrics(self, metrics):
         if self._recorder is not None:
             frame = self._current_frame
@@ -708,8 +722,12 @@ class LocalRuntimeSession:
                     last_action=last_actions[entry["robot_id"]],
                     parameters=self._fill_parameters,
                 )
-            for entry in self._groups:
-                entry["executor"].step(frame=frame)
+            self._in_plan_step = True
+            try:
+                for entry in self._groups:
+                    entry["executor"].step(frame=frame)
+            finally:
+                self._in_plan_step = False
             for entry in self._groups:
                 node_id = entry["output"].get("policyActionNodeId")
                 processor = (
