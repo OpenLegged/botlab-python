@@ -21,8 +21,8 @@ until then, run read-only checks only. The deployment scenarios are:
   over SSH**: gateway + agent both run on the board's loopback; a single `ssh -L` tunnel on the
   user's computer surfaces the gateway on the local loopback, and the browser still connects to
   `ws://127.0.0.1:50060`. Board installs are **always offline** (step 4); the board is never
-  required to reach the internet. Only boards that cannot be reached by direct SSH need the
-  domain-server variant (see `hil.md`, "Gateway targets").
+  required to reach the internet. This workflow requires SSH access; restore that connection
+  before proceeding if it is unavailable.
 
 Follow the user's token choice:
 
@@ -89,8 +89,8 @@ commands to restart them.
 ## 4. Scenario B commands (board on the LAN + SSH tunnel)
 
 Neither `ws://` leg ever leaves its own host's loopback (browser dials the user's loopback, agent
-dials the board loopback); traffic over the cable is encrypted by SSH, so no domain, certificate,
-or `wss://` is needed.
+dials the board loopback); traffic over the cable is encrypted by SSH. HIL device gateways use
+loopback `ws://` only; cross-machine connections use SSH local port forwarding.
 
 **Do the hardware match first**: once SSH works, identify the board —
 `cat /proc/device-tree/model`, `. /etc/os-release && echo "$PRETTY_NAME"` — then check the
@@ -132,7 +132,7 @@ BOTLAB_HIL_TOKEN=<token> ~/botlab-venv/bin/botlab-agent connect \
 
 # Local terminal 3: SSH tunnel (keep it running; if it drops, rerunning the same command restores it)
 ssh -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 \
-  -L 50060:127.0.0.1:50060 <user>@<board>
+  -L 127.0.0.1:50060:127.0.0.1:50060 <user>@<board>
 ```
 
 Success criteria: board terminal 2 shows `BotLab HIL agent: registered as <id> (onnxruntime)`
@@ -144,9 +144,8 @@ the final arbiter is the browser device window's Connect succeeding.
 
 Tokens are relayed only inside the conversation with the user — never written to files, logs, or
 commits; `ws://` stays on each host's own loopback (the user's loopback in scenario A, the board's
-loopback in scenario B), and scenario B's cross-machine traffic rides only the SSH tunnel; if a
-remote `wss://` gateway is required, a strong token is still mandatory, with its source
-following the user's choice in step 0.
+loopback in scenario B), and scenario B's cross-machine traffic rides only the SSH tunnel. The
+token source follows the user's choice in step 0.
 
 ## 6. Handoff
 
