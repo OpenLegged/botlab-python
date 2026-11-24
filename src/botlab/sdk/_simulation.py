@@ -1,14 +1,17 @@
 """Simulation entry point with resource, parameter and output handles."""
 import inspect
+import math
 from collections.abc import Mapping
 
 import botlab_host
 
 from ._compat import create_proxy
 from ._controllers import Controller, PolicyController, PositionController
+from ._declaration import _non_empty_string
 from ._resources import Model, Motion, Scene, Sensor
 from ._robot import Robot
 from ._runtime_types import Frame
+from ._vectors import require_vector
 
 
 def _native_modifier_proxy(modify_action):
@@ -97,6 +100,21 @@ class OverlayChannel(OutputChannel):
         OutputChannel.update(self, value)
 
 
+class ControlsHudChannel(OutputChannel):
+    """``sim.controls_hud``: bottom-strip key hints for custom controllers.
+
+    The per-item rules (fields, localized labels, limits) live in the
+    TypeScript contract -- ``parseControlsHudDeclaration`` is the single
+    source of truth and this side does not duplicate them. Python only
+    insists the payload itself is a list before handing it to the host.
+    """
+
+    def update(self, value):
+        if not isinstance(value, list):
+            raise TypeError("controls_hud.update() expects a list of items")
+        OutputChannel.update(self, value)
+
+
 class Simulation:
     @classmethod
     def from_project(cls):
@@ -108,6 +126,7 @@ class Simulation:
         self.metrics = OutputChannel("updateMetrics")
         self.diagnostics = OutputChannel("updateDiagnostics")
         self.overlay = OverlayChannel("updateOverlay")
+        self.controls_hud = ControlsHudChannel("updateControlsHud")
 
     def model(self, path):
         """The ONNX model this project declared at `path`.
@@ -162,6 +181,54 @@ class Simulation:
                 )
             spec["jointIndices"] = indices
         botlab_host.requestReset(str(reason), spec)
+
+    def place_body(
+        self,
+        body,
+        *,
+        position,
+        quaternion=None,
+        linear_velocity=(0, 0, 0),
+        angular_velocity=(0, 0, 0),
+    ):
+        """Set one free-joint scene body's state before the next physics substep.
+
+        ``body`` is a scene-global MuJoCo body name (e.g. a ball), not a robot base:
+        robots move with ``robot.teleport()``. ``position`` is world-frame xyz;
+        ``quaternion`` is a world-frame wxyz pose (normalized here; omitted keeps
+        the body's current orientation); ``linear_velocity`` is world-frame m/s and
+        ``angular_velocity`` world-frame rad/s (the runtime stores it body-local,
+        as MuJoCo free-joint qvel requires).
+
+        Only valid inside a control step. The write lands before the first physics
+        substep of the next tick, followed by ``mj_forward``, so the controller's
+        next observation sees it. Calling it again for the same body in the same
+        control step replaces the earlier write: the last call wins.
+        """
+        name = _non_empty_string(body, "place_body body")
+        position_values = require_vector(position, 3, "place_body position")
+        quaternion_values = None
+        if quaternion is not None:
+            quaternion_values = require_vector(quaternion, 4, "place_body quaternion")
+            norm = math.hypot(*quaternion_values)
+            if not math.isfinite(norm):
+                raise ValueError("place_body quaternion norm must be finite")
+            if norm == 0.0:
+                raise ValueError("place_body quaternion must not be all zeros")
+            quaternion_values = [value / norm for value in quaternion_values]
+        linear_values = require_vector(
+            linear_velocity, 3, "place_body linear_velocity"
+        )
+        angular_values = require_vector(
+            angular_velocity, 3, "place_body angular_velocity"
+        )
+        botlab_host.placeBody(
+            name,
+            position_values,
+            quaternion_values,
+            linear_values,
+            angular_values,
+        )
 
     def on_substep(self, callback):
         """Register a read-only observer called after every physics substep.

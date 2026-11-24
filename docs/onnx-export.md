@@ -38,9 +38,29 @@
    `graph.output` 的名字，`torch.onnx.export(..., input_names=["obs"], output_names=["action"])`
    直接控制它们。名字对不上是运行期的静默错位或深层报错，打包校验会直接拒。
 
-4. **形状**。固定形状(如 `(1, obs_dim)`)最稳;动态维度用 `dynamic_axes` 声明,但输出宽度
-   要能推断(静态维,或在 `Model(...)(..., output_dim=N)` 里显式给定),否则引擎报
-   `Cannot infer outputDim`。
+4. **形状**。所有输入/输出维度都导出成静态正整数,batch 钉死 1(如 `(1, obs_dim)` →
+   `(1, action_dim)`)。训练代码为轨迹采样/向量化环境导出时常带 `dynamic_axes`(第 0 维
+   是符号名 `batch`),这种模型 ONNX Runtime 喂 batch=1 正常、浏览器本地推理也不报错,
+   但 HIL 部署装载时直接拒绝:`HIL requires static, positive tensor dimensions`
+   (HIL 线协议每帧传裸 float32 字节,张量形状在装载时编译死,不随帧协商)。已导出的
+   模型只改维度声明、不动权重即可钉死:
+
+   ```python
+   import onnx
+
+   model = onnx.load(path)
+   for value in list(model.graph.input) + list(model.graph.output):
+       for dim in value.type.tensor_type.shape.dim:
+           if dim.HasField("dim_param"):      # 符号维(如 "batch")
+               dim.ClearField("dim_param")
+               dim.dim_value = 1
+   onnx.save(model, path)
+   ```
+
+   钉完用 onnxruntime 喂真实输入跑一次前向确认。浏览器本地引擎对动态输入维宽容:
+   输出宽度要能推断(静态维,或在 `Model(...)(..., output_dim=N)` 里显式给定),否则
+   引擎报 `Cannot infer outputDim`——但这不是留动态维的理由,浏览器能跑、部署必炸的
+   问题最晚才暴露。
 
 5. **奇偶校验**。导出脚本内置 torch↔onnxruntime 随机输入对比,阈值建议 `max|Δ| < 1e-4`:
 

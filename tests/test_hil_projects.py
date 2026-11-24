@@ -16,7 +16,7 @@ import pytest
 from botlab._project import STANDARD_PYTHON_MAIN
 from botlab.hil.agent import AgentState
 from botlab.hil.artifacts import ProjectStore, build_digest, build_project, validate_artifact
-from botlab.hil.protocol import HilError
+from botlab.hil.protocol import MAX_CHUNK_BYTES, HilError
 from botlab.hil.worker import WorkerBackend
 
 MODEL = (Path(__file__).parent / "assets" / "identity.onnx").read_bytes()
@@ -136,7 +136,7 @@ def test_load_rejects_undeployed_model_and_changed_release(state):
         state.dispatch(owner, {"op": "load", "session": session, "sha256": "a" * 64,
                                "data": base64.b64encode(b"different").decode()})
     state.dispatch(owner, {"op": "stop", "session": session})
-    model_file = next(state.store.projects.rglob("*.onnx"))
+    model_file = state.store.object_path(value["manifest"]["models"][0]["sha256"])
     model_file.write_bytes(bytes([MODEL[0] ^ 1]) + MODEL[1:])
     with pytest.raises(HilError, match="SHA-256"):
         load(state, owner, value)
@@ -220,16 +220,51 @@ def test_build_only_models_stable_identity_and_controller_sensitive(tmp_path):
     (project / "assets/models/unrelated.onnx").write_bytes(b"not declared")
     first = build_project(project)
     assert build_project(project) == first
-    assert len(first["files"]) == 1
+    # The declared model and the declared scene resource ship as blobs;
+    # undeclared assets and text sources (including credentials.txt) never do.
+    assert len(first["files"]) == 2
+    assert "blobs/" + hashlib.sha256(b"<mujoco/>").hexdigest() in first["files"]
     renamed = tmp_path / "renamed"
     shutil.move(project, renamed)
     assert build_project(renamed) == first
     (renamed / "controller.py").write_text(CONTROLLER.replace("Test Duck", "Another name"))
     changed = build_project(renamed)
     assert changed["manifest"]["project"]["id"] == first["manifest"]["project"]["id"]
+    # Sources are digest-pinned: a controller edit makes a new version while
+    # the resource blobs themselves are unchanged.
     assert changed["manifest"]["build_id"] != first["manifest"]["build_id"]
     assert changed["files"] == first["files"]
     validate_artifact(changed)
+
+
+def test_build_skips_declared_only_sources(tmp_path):
+    from tests.test_project import CONTROLLER, PRESET
+
+    project = tmp_path / "stairs"
+    project.mkdir()
+    (project / "main.py").write_text(STANDARD_PYTHON_MAIN)
+    (project / "controller.py").write_text(
+        CONTROLLER.replace(
+            "from botlab import Model, PolicyController, Robot, concat, project, constant",
+            "from botlab import Model, PolicyController, Robot, Scene, concat, project, constant",
+        ).replace(
+            "actor = Model(",
+            'scene = Scene("procedural://stairs", config={"terrainKind": "stairs"})\n'
+            "actor = Model(",
+        )
+    )
+    (project / "robot.preset.yaml").write_text(PRESET)
+    (project / "assets/robot").mkdir(parents=True)
+    (project / "assets/models").mkdir()
+    (project / "assets/robot/scene.xml").write_text("<mujoco/>")
+    (project / "assets/models/policy.onnx").write_bytes(MODEL)
+    built = build_project(project)
+    # Declared-only sources (procedural:// terrain, registry:// motions) have no
+    # bytes to package: only the file-backed robot and model ship.
+    kinds = sorted(resource["kind"] for resource in built["manifest"]["resources"])
+    assert kinds == ["model", "robot"]
+    assert len(built["files"]) == 2
+    validate_artifact(built)
 
 
 def test_build_accepts_matching_browser_sources_and_crlf(project_dir):
@@ -436,3 +471,234 @@ def test_running_owner_protects_even_inactive_release_from_other_management(stat
     assert state.owner is state.project_owner is owner
     assert state.loaded == selection
     assert len(state.store.list()) == 2
+
+
+def resource_artifact(project_id="project-one", name="Example", revision="first", scene=b"<mujoco/>"):
+    """New-shape artifact: content-addressed resources of several kinds."""
+    model_digest, scene_digest = hashlib.sha256(MODEL).hexdigest(), hashlib.sha256(scene).hexdigest()
+    resources = [
+        {"kind": "model", "id": "policy", "sha256": model_digest, "path": f"blobs/{model_digest}",
+         "size": len(MODEL), "config": {"inputName": "input"}},
+        {"kind": "scene", "id": "terrain", "sha256": scene_digest, "path": f"blobs/{scene_digest}",
+         "size": len(scene), "config": {}},
+    ]
+    resources.sort(key=lambda item: (item["kind"], item["id"]))
+    manifest = {"schema": 1, "project": {"id": project_id, "name": name},
+                "execution_kind": "model-service", "backend": "onnxruntime",
+                "project_digest": hashlib.sha256(revision.encode()).hexdigest(),
+                "control_hz": 50, "physics_hz": 200, "resources": resources}
+    manifest["build_id"] = build_digest(manifest)
+    contents = {model_digest: MODEL, scene_digest: scene}
+    return manifest, contents
+
+
+def staged_deploy(state, owner, manifest, contents):
+    reply = state.dispatch(owner, {"op": "projects.stage", "manifest": manifest})
+    if reply.get("already_deployed"):
+        return reply
+    for missing in reply["missing"]:
+        content = contents[missing["sha256"]]
+        for offset in range(0, len(content), 7):
+            state.dispatch(owner, {"op": "blob.put", "staging": reply["staging"],
+                                   "sha256": missing["sha256"],
+                                   "data": base64.b64encode(content[offset:offset + 7]).decode()})
+    return state.dispatch(owner, {"op": "projects.commit", "staging": reply["staging"]})
+
+
+def test_staged_deploy_uploads_missing_blobs_only_and_versions(state):
+    owner = object()
+    manifest, contents = resource_artifact()
+    staged_deploy(state, owner, manifest, contents)
+    assert staged_deploy(state, owner, manifest, contents)["already_deployed"] is True
+
+    revised, revised_contents = resource_artifact(revision="second", scene=b"<mujoco camp/>")
+    reply = state.dispatch(owner, {"op": "projects.stage", "manifest": revised})
+    assert [item["sha256"] for item in reply["missing"]] == [
+        hashlib.sha256(b"<mujoco camp/>").hexdigest()]
+    staged_deploy(state, owner, revised, revised_contents)
+    summary = state.store.summary("project-one")
+    assert [len(item["resources"]) for item in summary["releases"]] == [2, 2]
+    # One model blob, two scene blobs: releases share model bytes on disk.
+    assert len(list(state.store.objects.glob("*.bin"))) == 3
+
+
+def test_staged_deploy_rejects_oversized_and_foreign_uploads(state):
+    owner, other = object(), object()
+    manifest, contents = resource_artifact()
+    reply = state.dispatch(owner, {"op": "projects.stage", "manifest": manifest})
+    with pytest.raises(HilError, match="owned by another connection"):
+        state.dispatch(other, {"op": "blob.put", "staging": reply["staging"],
+                               "sha256": hashlib.sha256(MODEL).hexdigest(),
+                               "data": base64.b64encode(MODEL[:3]).decode()})
+    with pytest.raises(HilError, match="not declared"):
+        state.dispatch(owner, {"op": "blob.put", "staging": reply["staging"],
+                               "sha256": "a" * 64, "data": base64.b64encode(b"xx").decode()})
+    with pytest.raises(HilError, match="overflows"):
+        state.dispatch(owner, {"op": "blob.put", "staging": reply["staging"],
+                               "sha256": hashlib.sha256(MODEL).hexdigest(),
+                               "data": base64.b64encode(MODEL + b"!").decode()})
+    state.disconnect(owner)
+    assert not list(state.store.staging.iterdir())
+    with pytest.raises(HilError, match="stage again"):
+        state.dispatch(owner, {"op": "projects.commit", "staging": reply["staging"]})
+
+
+def test_staged_deploy_serves_duplicate_content_resources(state):
+    owner = object()
+    scene = b"<mujoco/>"
+    manifest, contents = resource_artifact(scene=scene)
+    digest = hashlib.sha256(scene).hexdigest()
+    # A second resource with identical content must not wedge the staging.
+    manifest["resources"].append(
+        {"kind": "scene", "id": "terrain-copy", "sha256": digest, "path": f"blobs/{digest}",
+         "size": len(scene), "config": {}})
+    manifest["resources"].sort(key=lambda item: (item["kind"], item["id"]))
+    manifest["build_id"] = build_digest(manifest)
+    reply = state.dispatch(owner, {"op": "projects.stage", "manifest": manifest})
+    assert len(reply["missing"]) == 2  # the duplicate shares the scene blob
+    assert staged_deploy(state, owner, manifest, contents)["already_deployed"] is False
+    assert len(list(state.store.objects.glob("*.bin"))) == 2
+
+
+@pytest.mark.parametrize("resume_upload", [True, False], ids=["resume-put", "direct-commit"])
+def test_staged_deploy_cleans_partial_blob_completed_by_another_staging(state, resume_upload):
+    owner = object()
+    scene = b"<mujoco/>"
+    manifest, contents = resource_artifact(scene=scene)
+    digest = hashlib.sha256(scene).hexdigest()
+    staging = state.dispatch(owner, {"op": "projects.stage", "manifest": manifest})["staging"]
+    partial = state.dispatch(owner, {"op": "blob.put", "staging": staging, "sha256": digest,
+                                     "data": base64.b64encode(scene[:3]).decode()})
+    assert partial == {"received": 3, "complete": False}
+    part = state.store.staging / staging / f"{digest}.part"
+    assert part.read_bytes() == scene[:3]
+
+    # A second staging can finish the same shared blob while the first is incomplete.
+    revised, revised_contents = resource_artifact(revision="second", scene=scene)
+    staged_deploy(state, owner, revised, revised_contents)
+    assert part.exists()
+    if resume_upload:
+        completed = state.dispatch(owner, {"op": "blob.put", "staging": staging,
+                                          "sha256": digest,
+                                          "data": base64.b64encode(scene[3:]).decode()})
+        assert completed == {"received": len(scene), "complete": True}
+        assert not part.exists()
+
+    committed = state.dispatch(owner, {"op": "projects.commit", "staging": staging})
+    assert committed["already_deployed"] is False
+    release = state.store.release_path(manifest["project"]["id"], manifest["build_id"])
+    assert not list(release.glob("*.part"))
+    for value in (manifest, revised):
+        state.store.manifest(value["project"]["id"], value["build_id"], verify_files=True)
+    for sha256, content in contents.items():
+        assert state.store.object_path(sha256).read_bytes() == content
+
+
+def test_staged_deploy_resumes_after_corrupt_final_chunk(state):
+    owner = object()
+    manifest, contents = resource_artifact()
+    scene = b"<mujoco/>"
+    digest = hashlib.sha256(scene).hexdigest()
+    reply = state.dispatch(owner, {"op": "projects.stage", "manifest": manifest})
+    staging = reply["staging"]
+    # A full-size chunk with wrong bytes fills the part, then fails verification.
+    with pytest.raises(HilError, match="verification failed"):
+        state.dispatch(owner, {"op": "blob.put", "staging": staging, "sha256": digest,
+                               "data": base64.b64encode(b"#" * len(scene)).decode()})
+    # The staging survives: both blobs upload and the same staging commits.
+    for sha256, content in contents.items():
+        for offset in range(0, len(content), 7):
+            state.dispatch(owner, {"op": "blob.put", "staging": staging, "sha256": sha256,
+                                   "data": base64.b64encode(content[offset:offset + 7]).decode()})
+    committed = state.dispatch(owner, {"op": "projects.commit", "staging": staging})
+    assert committed["already_deployed"] is False
+
+
+def test_cancel_sweeps_unreferenced_blobs_only(state):
+    owner = object()
+    staged_deploy(state, owner, *resource_artifact())
+    revised, _ = resource_artifact(revision="second", scene=b"<mujoco camp/>")
+    reply = state.dispatch(owner, {"op": "projects.stage", "manifest": revised})
+    camp = b"<mujoco camp/>"
+    for offset in range(0, len(camp), 7):
+        state.dispatch(owner, {"op": "blob.put", "staging": reply["staging"],
+                               "sha256": hashlib.sha256(camp).hexdigest(),
+                               "data": base64.b64encode(camp[offset:offset + 7]).decode()})
+    state.dispatch(owner, {"op": "projects.cancel", "staging": reply["staging"]})
+    # The cancelled camp blob is gone; blobs the release references survive.
+    kept = {blob.stem for blob in state.store.objects.glob("*.bin")}
+    assert kept == {hashlib.sha256(MODEL).hexdigest(), hashlib.sha256(b"<mujoco/>").hexdigest()}
+
+
+def test_remove_collects_unreferenced_blobs_only(state):
+    owner = object()
+    first, first_contents = resource_artifact()
+    second, second_contents = resource_artifact(revision="second", scene=b"<mujoco camp/>")
+    staged_deploy(state, owner, first, first_contents)
+    staged_deploy(state, owner, second, second_contents)
+    shared = state.store.object_path(hashlib.sha256(MODEL).hexdigest())
+    retired = state.store.object_path(hashlib.sha256(b"<mujoco/>").hexdigest())
+    state.dispatch(owner, {"op": "projects.remove", "project_id": "project-one",
+                           "build_id": first["build_id"]})
+    assert not retired.exists()
+    assert shared.exists()
+
+
+def test_blob_get_serves_referenced_windows_only(state):
+    owner = object()
+    manifest, contents = resource_artifact()
+    staged_deploy(state, owner, manifest, contents)
+    digest = hashlib.sha256(MODEL).hexdigest()
+    page = state.dispatch(owner, {"op": "blob.get", "sha256": digest, "offset": 4, "length": 8})
+    assert base64.b64decode(page["data"]) == MODEL[4:12] and page["total"] == len(MODEL)
+    everything = state.dispatch(owner, {"op": "blob.get", "sha256": digest})
+    assert base64.b64decode(everything["data"]) == MODEL
+    with pytest.raises(HilError, match="not referenced"):
+        state.dispatch(owner, {"op": "blob.get", "sha256": "b" * 64})
+
+
+def test_blob_get_pages_oversized_blobs_within_frame_limit(state):
+    owner = object()
+    # One chunk past the cap: a single unwindowed read would overflow the wire
+    # frame after base64, so blob.get must split it into pages.
+    scene = os.urandom(MAX_CHUNK_BYTES + 1024 * 1024)
+    manifest, contents = resource_artifact(scene=scene)
+    digest = hashlib.sha256(scene).hexdigest()
+    reply = state.dispatch(owner, {"op": "projects.stage", "manifest": manifest})
+    for sha256, content in contents.items():
+        step = MAX_CHUNK_BYTES if sha256 == digest else 7
+        for offset in range(0, len(content), step):
+            state.dispatch(owner, {"op": "blob.put", "staging": reply["staging"], "sha256": sha256,
+                                   "data": base64.b64encode(content[offset:offset + step]).decode()})
+    state.dispatch(owner, {"op": "projects.commit", "staging": reply["staging"]})
+    pages, offset = [], 0
+    while offset < len(scene):
+        page = state.dispatch(owner, {"op": "blob.get", "sha256": digest, "offset": offset})
+        chunk = base64.b64decode(page["data"])
+        pages.append(chunk)
+        offset += len(chunk)
+    assert page["total"] == len(scene)
+    assert [len(chunk) for chunk in pages] == [MAX_CHUNK_BYTES, len(scene) - MAX_CHUNK_BYTES]
+    assert b"".join(pages) == scene
+
+
+def test_legacy_release_layout_migrates_into_shared_objects(tmp_path):
+    from botlab.hil.artifacts import ProjectStore
+    legacy = artifact()
+    manifest = legacy["manifest"]
+    build_id, project = manifest["build_id"], manifest["project"]
+    root = tmp_path / "botlab"
+    release = root / "projects" / project["id"] / "releases" / build_id
+    release.mkdir(parents=True)
+    (release / "manifest.json").write_text(json.dumps(manifest))
+    (release / ".deployment.json").write_text(json.dumps({"created_at": 1.0}))
+    (release / "models").mkdir()
+    (release / "models" / (hashlib.sha256(MODEL).hexdigest() + ".onnx")).write_bytes(MODEL)
+    (root / "projects" / project["id"] / "project.json").write_text(json.dumps(project))
+    (root / "projects" / project["id"] / "current").write_text(json.dumps(build_id))
+
+    store = ProjectStore(root)
+    blob = store.object_path(hashlib.sha256(MODEL).hexdigest())
+    assert blob.is_file() and blob.read_bytes() == MODEL
+    assert not (release / "models").exists()
+    store.manifest(project["id"], build_id, verify_files=True)
