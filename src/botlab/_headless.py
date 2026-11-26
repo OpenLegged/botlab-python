@@ -309,6 +309,7 @@ def open_headless(directory) -> HeadlessRun:
             control_hz=manifest["control_hz"],
             physics_hz=manifest["physics_hz"],
             path_resolver=resolve,
+            project_directory=directory,
         )
         botlab_host.set_runtime_session(session)
 

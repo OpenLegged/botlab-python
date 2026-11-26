@@ -1,6 +1,8 @@
 """Simulation entry point with resource, parameter and output handles."""
 import inspect
+import json
 import math
+import re
 from collections.abc import Mapping
 
 import botlab_host
@@ -134,6 +136,34 @@ class Simulation:
         The path is the resource ID, so the reference here reads as the file it loads.
         """
         return self.resources.model(path)
+
+    def write_result(self, path, value):
+        """Store JSON run output under ``results/`` in the current project.
+
+        The host owns the project and control-step lifetime. It rejects writes
+        outside a live step, stale runs and overwriting ordinary project files.
+        The envelope identifies generated output without reserving every JSON
+        file under results/ as a runtime result.
+        """
+        if not isinstance(path, str):
+            raise TypeError("write_result path must be a string")
+        if re.fullmatch(
+            r"results/(?:[A-Za-z0-9_][A-Za-z0-9_.-]*/)*[A-Za-z0-9_][A-Za-z0-9_.-]*\.json",
+            path,
+        ) is None:
+            raise ValueError("write_result path must be a safe results/<name>.json path")
+        content = json.dumps(
+            {"format": "botlab.runtime-result", "version": 1, "data": value},
+            ensure_ascii=False,
+            allow_nan=False,
+            indent=2,
+        ) + "\n"
+        write = getattr(botlab_host, "writeResult", None)
+        if write is None:
+            raise RuntimeError(
+                "Simulation.write_result requires a runtime with project result storage"
+            )
+        write(path, content)
 
     def request_reset(self, reason="Python controller requested reset"):
         botlab_host.requestReset(str(reason))

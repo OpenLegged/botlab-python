@@ -560,6 +560,40 @@ def test_staged_deploy_serves_duplicate_content_resources(state):
     assert len(list(state.store.objects.glob("*.bin"))) == 2
 
 
+@pytest.mark.parametrize("resume_upload", [True, False], ids=["resume-put", "direct-commit"])
+def test_staged_deploy_cleans_partial_blob_completed_by_another_staging(state, resume_upload):
+    owner = object()
+    scene = b"<mujoco/>"
+    manifest, contents = resource_artifact(scene=scene)
+    digest = hashlib.sha256(scene).hexdigest()
+    staging = state.dispatch(owner, {"op": "projects.stage", "manifest": manifest})["staging"]
+    partial = state.dispatch(owner, {"op": "blob.put", "staging": staging, "sha256": digest,
+                                     "data": base64.b64encode(scene[:3]).decode()})
+    assert partial == {"received": 3, "complete": False}
+    part = state.store.staging / staging / f"{digest}.part"
+    assert part.read_bytes() == scene[:3]
+
+    # A second staging can finish the same shared blob while the first is incomplete.
+    revised, revised_contents = resource_artifact(revision="second", scene=scene)
+    staged_deploy(state, owner, revised, revised_contents)
+    assert part.exists()
+    if resume_upload:
+        completed = state.dispatch(owner, {"op": "blob.put", "staging": staging,
+                                          "sha256": digest,
+                                          "data": base64.b64encode(scene[3:]).decode()})
+        assert completed == {"received": len(scene), "complete": True}
+        assert not part.exists()
+
+    committed = state.dispatch(owner, {"op": "projects.commit", "staging": staging})
+    assert committed["already_deployed"] is False
+    release = state.store.release_path(manifest["project"]["id"], manifest["build_id"])
+    assert not list(release.glob("*.part"))
+    for value in (manifest, revised):
+        state.store.manifest(value["project"]["id"], value["build_id"], verify_files=True)
+    for sha256, content in contents.items():
+        assert state.store.object_path(sha256).read_bytes() == content
+
+
 def test_staged_deploy_resumes_after_corrupt_final_chunk(state):
     owner = object()
     manifest, contents = resource_artifact()

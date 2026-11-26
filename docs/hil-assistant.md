@@ -7,12 +7,18 @@
 
 **目标**：让浏览器「设备网关」面板连上网关，模型推理下发到目标设备执行。
 
-## 0. 先问场景，再动手
+## 0. 先确认场景与令牌选择，再动手
 
-用一句话向用户确认处于哪种情况，确认前只做只读检查：
+部署前一起确认部署场景和连接令牌的来源：由用户自定义，还是由 AI 随机生成。当前对话中已明确的信息直接采用，不重复询问；未明确的事项必须等待用户答复，期间只做只读检查。部署场景如下：
 
 - **A. 本机试跑（无板卡）**：同一台电脑起网关 + agent，浏览器连 `ws://127.0.0.1:50060`。
 - **B. 真实 Linux 板卡（板卡 HIL 需 Python ≥3.11，系统 Python 更旧时传独立 CPython，见第 4 步），网线/局域网连着用户本机且 SSH 可达**：网关 + agent 都跑在板卡回环，本机一条 `ssh -L` 隧道把网关投到本机回环，浏览器仍连 `ws://127.0.0.1:50060`。板卡装包一律**离线装**（第 4 步），不要求板卡出网。本流程要求 SSH 可达；无法连接时先恢复 SSH 链路。
+
+令牌选择按用户答复执行：
+
+- **自定义**：使用用户提供的非空令牌；若尚未提供或值为空，继续询问并等待，不自行改成随机生成。
+- **随机生成**：用户选择后，用 `secrets.token_urlsafe(32)` 等安全随机数生成器生成一次。
+- 将选定的同一令牌用于网关的 `BOTLAB_HIL_GATEWAY_TOKEN`、Agent 的 `BOTLAB_HIL_TOKEN` 和浏览器连接；后文的 `<令牌>` 均指这个值。部署时显式传入，不另行生成。
 
 ## 1. 组件检查（只读）
 
@@ -34,8 +40,8 @@
 
 ```bash
 # 启动前确认端口空闲：lsof -nP -iTCP:50060
-# 终端 1（令牌来自 BOTLAB_HIL_GATEWAY_TOKEN，未设则随机生成并由 --print-token 打印）
-botlab-hil-gateway --host 127.0.0.1 --port 50060 --print-token
+# 终端 1（使用第 0 步选定的令牌，由 --print-token 打印供交付）
+BOTLAB_HIL_GATEWAY_TOKEN=<令牌> botlab-hil-gateway --host 127.0.0.1 --port 50060 --print-token
 # 终端 2（省略 BOTLAB_HIL_TOKEN 则 getpass 交互输入，不落 shell 历史）
 BOTLAB_HIL_TOKEN=<令牌> botlab-agent connect --gateway ws://127.0.0.1:50060 --device my-laptop
 ```
@@ -81,7 +87,7 @@ mkdir -p ~/botlab-python && tar xzf cpython-*.tar.gz -C ~/botlab-python --strip-
 
 # 板卡：一次性安装两个常驻 systemd 用户服务（令牌固定进 0600 环境文件，
 # 重启后自动回来，不再需要板卡终端；卸载用各自的 uninstall 子命令）
-# 令牌 = secrets.token_urlsafe(32)，两条 install 必须用同一令牌：
+# 令牌用第 0 步选定的值（自定义或随机生成），两条 install 必须用同一令牌：
 #   助手代跑用 env 前缀传入；用户手动跑则省略 env、按提示交互输入（不落 shell 历史）
 BOTLAB_HIL_GATEWAY_TOKEN=<令牌> ~/botlab-venv/bin/botlab-hil-gateway install \
   --host 127.0.0.1 --port 50060
@@ -107,7 +113,7 @@ ssh -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 \
 
 ## 5. 安全规则
 
-令牌只在用户对话中转述；除服务安装写入的 0600 环境文件（网关 `~/.config/botlab/gateway-token.env`、agent `<root>/agent/gateway-token.env`，卸载即删）外，绝不写入其他文件、日志或提交，也绝不作为命令行参数传递。`ws://` 仅限各自主机回环（场景 A 的本机回环、场景 B 的板卡回环），场景 B 的跨机流量只走 SSH 隧道。
+令牌只在用户对话中转述；除服务安装写入的 0600 环境文件（网关 `~/.config/botlab/gateway-token.env`、agent `<root>/agent/gateway-token.env`，卸载即删）外，绝不写入其他文件、日志或提交，也绝不作为命令行参数传递。`ws://` 仅限各自主机回环（场景 A 的本机回环、场景 B 的板卡回环），场景 B 的跨机流量只走 SSH 隧道。令牌来源遵守第 0 步的用户选择。
 
 ## 6. 交付
 
