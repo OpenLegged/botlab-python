@@ -32,7 +32,7 @@ Follow the user's token choice:
   secure generator such as `secrets.token_urlsafe(32)`.
 - Use the same selected token for the gateway's `BOTLAB_HIL_GATEWAY_TOKEN`, the Agent's
   `BOTLAB_HIL_TOKEN`, and the browser connection. Every `<token>` below refers to this value.
-  Pass it explicitly at startup instead of generating another one.
+  Pass it explicitly at deploy time instead of generating another one.
 
 ## 1. Component check (read-only)
 
@@ -84,7 +84,8 @@ gateway validates the token — a wrong token still shows registered first, then
 `lsof -iTCP:50060` shows ESTABLISHED; the final arbiter is the browser device window's Connect
 succeeding. The assistant may run these on the user's behalf (as session background tasks), but
 must tell the user the processes stop when the session ends, and must hand over the two terminal
-commands to restart them.
+commands to restart them. For a persistent, boot-surviving setup, use the service install from
+step 4 instead (`botlab-hil-gateway install` / `botlab-agent install`).
 
 ## 4. Scenario B commands (board on the LAN + SSH tunnel)
 
@@ -123,29 +124,44 @@ mkdir -p ~/botlab-python && tar xzf cpython-*.tar.gz -C ~/botlab-python --strip-
 # Board: offline install (the board never needs internet access)
 ~/botlab-venv/bin/pip install --no-index --find-links ~/botlab-pkgs "botlab-python[gateway,target]"
 
-# Board terminal 1: gateway (binds the board loopback only; use the token selected in step 0)
-BOTLAB_HIL_GATEWAY_TOKEN=<token> ~/botlab-venv/bin/botlab-hil-gateway --host 127.0.0.1 --port 50060 --print-token
+# Board, once: install both as resident systemd user services (the token is pinned
+# into 0600 env files; everything comes back after a reboot with no board terminals;
+# remove with each command's uninstall subcommand)
+# Use the token selected in step 0 (custom or randomly generated), identical for both installs:
+#   the assistant passes it via an env prefix; for manual runs, omit the env and
+#   type it at the prompt (keeps it out of shell history)
+BOTLAB_HIL_GATEWAY_TOKEN=<token> ~/botlab-venv/bin/botlab-hil-gateway install \
+  --host 127.0.0.1 --port 50060
+BOTLAB_HIL_TOKEN=<token> ~/botlab-venv/bin/botlab-agent install \
+  --gateway ws://127.0.0.1:50060 --device <device-id> --enable-linger
 
-# Board terminal 2: agent (the gateway lives on the board; dial the board loopback)
-BOTLAB_HIL_TOKEN=<token> ~/botlab-venv/bin/botlab-agent connect \
-  --gateway ws://127.0.0.1:50060 --device <device-id>
+# If --enable-linger fails, the installer prints the sudo command it needs: hand it
+# to the user verbatim — the assistant never runs sudo on its own. Without lingering
+# the services still work; they just wait for the user's first login.
 
-# Local terminal 3: SSH tunnel (keep it running; if it drops, rerunning the same command restores it)
+# Local terminal (the only foreground process left): SSH tunnel, keep it running;
+# if it drops, rerunning the same command restores it
 ssh -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 \
   -L 127.0.0.1:50060:127.0.0.1:50060 <user>@<board>
 ```
 
-Success criteria: board terminal 2 shows `BotLab HIL agent: registered as <id> (onnxruntime)`
-**with no** `gateway link dropped` after it (registered prints before token validation, so a wrong
-token shows it too); the user's `lsof -nP -iTCP:50060` shows ssh listening on `127.0.0.1:50060`;
-the final arbiter is the browser device window's Connect succeeding.
+Success criteria: on the board, `systemctl --user is-active botlab-hil-gateway.service` and
+`botlab-agent-*.service` (full name via `systemctl --user list-units 'botlab-*'`) both report
+`active`; `journalctl --user -u <agent unit>` shows `BotLab HIL agent: registered as <id>
+(onnxruntime)` **with no** `gateway link dropped` after it (registered prints before token
+validation, so a wrong token shows it too — with a wrong token, uninstall both services and
+reinstall with the correct one); the user's `lsof -nP -iTCP:50060` shows ssh listening on
+`127.0.0.1:50060`; the final arbiter is the browser device window's Connect succeeding.
 
 ## 5. Security rules
 
-Tokens are relayed only inside the conversation with the user — never written to files, logs, or
-commits; `ws://` stays on each host's own loopback (the user's loopback in scenario A, the board's
-loopback in scenario B), and scenario B's cross-machine traffic rides only the SSH tunnel. The
-token source follows the user's choice in step 0.
+Tokens are relayed only inside the conversation with the user; apart from the 0600 env files a
+service install writes (gateway `~/.config/botlab/gateway-token.env`, agent
+`<root>/agent/gateway-token.env`, both removed on uninstall), they are never written to any other
+file, log, or commit, and never passed as a command-line argument. `ws://` stays on each host's
+own loopback (the user's loopback in scenario A, the board's loopback in scenario B), and
+scenario B's cross-machine traffic rides only the SSH tunnel. The token source follows the
+user's choice in step 0.
 
 ## 6. Handoff
 

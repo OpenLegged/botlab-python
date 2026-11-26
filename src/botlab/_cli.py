@@ -409,7 +409,7 @@ def _cmd_target(args: argparse.Namespace) -> int:
         elif action == "add":
             if not args.name or not (args.endpoint or args.ssh_host or args.gateway):
                 raise BotLabError("target add requires NAME and (--ssh-host HOST --user USER "
-                                  "| --endpoint tcp://host:port | --gateway wss://… --device ID)")
+                                  "| --endpoint tcp://host:port | --gateway ws://127.0.0.1:PORT --device ID)")
             settings = {"id": args.name, "name": args.name, "backend": args.backend}
             if args.gateway:
                 settings.update(transport="gateway", endpoint=args.gateway, device=args.device)
@@ -579,7 +579,7 @@ def build_parser() -> argparse.ArgumentParser:
     target.add_argument("action", choices=["list", "add", "inspect", "remove", "discover", "identity", "provision", "projects", "bench"])
     target.add_argument("name", nargs="?")
     target.add_argument("--endpoint")
-    target.add_argument("--gateway", help="outbound gateway origin, ws://loopback:port or wss://host[:port]")
+    target.add_argument("--gateway", help="loopback gateway origin, ws://loopback:port (SSH forwarding for remote devices)")
     target.add_argument("--device", help="device ID the board agent registered at the gateway")
     target.add_argument("--model", type=Path, help="model file for target bench")
     target.add_argument("--iterations", type=int, default=200, help="bench inference iterations")

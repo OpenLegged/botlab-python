@@ -7,8 +7,8 @@ no task table. There is exactly one shared bearer token (operator channel,
 same restricted-credential stance as Control M1) and no tokenless mode; it
 arrives in the ``Authorization`` header or, for browsers that cannot set
 handshake headers, as one leading ``{"type": "gateway-auth", "token": ...}``
-text control frame. ``ws://`` is for loopback development, remote gateways
-must use ``wss://``.
+text control frame. The gateway binds only to loopback; cross-machine clients
+connect through an SSH tunnel to its ``ws://`` endpoint.
 
 Pairing rules:
 - one agent per device ID: a re-registration takes over and closes the old
@@ -25,12 +25,11 @@ import argparse
 import json
 import os
 import secrets
-import ssl
 import sys
 import threading
 from pathlib import Path
 
-from .protocol import LEASE_RELEASE_CLOSE_CODE, MAX_FRAME_BYTES, HilError
+from .protocol import GATEWAY_LOOPBACK_HOSTS, LEASE_RELEASE_CLOSE_CODE, MAX_FRAME_BYTES, HilError
 
 RECV_TIMEOUT = 600
 AUTH_TIMEOUT = 5
@@ -199,24 +198,77 @@ class Gateway:
                 "coordinator disconnected")
 
 
-def _ssl_context(certificate: Path | None, key: Path | None) -> ssl.SSLContext | None:
-    if not certificate and not key:
-        return None
-    if not certificate or not key:
-        raise HilError("Gateway TLS needs both --tls-cert and --tls-key")
-    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    context.load_cert_chain(certificate, key)
-    return context
+GATEWAY_UNIT = "botlab-hil-gateway.service"
+
+
+def _install(options) -> int:
+    """Install the gateway as a systemd user service with a pinned token.
+
+    A service must not generate a fresh random token per restart — that would
+    silently invalidate every enrolled agent — so the token is pinned from
+    BOTLAB_HIL_GATEWAY_TOKEN or an interactive prompt into a 0600 env file.
+    """
+    import getpass
+
+    from .service import check_env_token, install_service
+
+    token = check_env_token("BOTLAB_HIL_GATEWAY_TOKEN",
+                            os.environ.get("BOTLAB_HIL_GATEWAY_TOKEN")
+                            or getpass.getpass("Gateway token to pin: "))
+    exec_argv = [sys.executable, "-m", "botlab.hil.gateway",
+                 "--host", options.host, "--port", str(options.port)]
+    try:
+        summary = install_service(
+            GATEWAY_UNIT, "BotLab HIL device gateway",
+            exec_argv, Path.home() / ".config/botlab/gateway-token.env",
+            {"BOTLAB_HIL_GATEWAY_TOKEN": token}, enable_linger=options.enable_linger)
+    except HilError as exc:
+        print(f"botlab-hil-gateway install: {exc}", file=sys.stderr)
+        return 1
+    print(f"Installed {summary['unit']} with a pinned token ({summary['env_file']}, 0600)")
+    print(f"  unit:  {summary['unit_file']}")
+    print(f"  starts at login; logs: journalctl --user -u {summary['unit']} -f")
+    if summary["autostart"]:
+        print("  autostart at boot: yes (lingering enabled)")
+    else:
+        print("  autostart at boot: no — a user service only starts at login.")
+        print("  to start at boot without a login, run: sudo loginctl enable-linger $USER")
+    return 0 if summary["linger_error"] is None else 1
+
+
+def _uninstall(options) -> int:
+    from .service import uninstall_service
+
+    try:
+        summary = uninstall_service(GATEWAY_UNIT, Path.home() / ".config/botlab/gateway-token.env")
+    except HilError as exc:
+        print(f"botlab-hil-gateway uninstall: {exc}", file=sys.stderr)
+        return 1
+    print(f"Removed {summary['unit']} and {summary['env_file']}")
+    return 0
 
 
 def main(argv=None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv[:1] in (["install"], ["uninstall"]):
+        install = argv[0] == "install"
+        parser = argparse.ArgumentParser(
+            description=("Install" if install else "Remove")
+                      + " the gateway as a systemd user service with a pinned token")
+        parser.add_argument("--host", default="127.0.0.1", choices=GATEWAY_LOOPBACK_HOSTS,
+                            help="loopback bind address; use SSH forwarding for remote clients")
+        parser.add_argument("--port", type=int, default=50060)
+        if install:
+            parser.add_argument("--enable-linger", action="store_true",
+                                help="also enable user lingering so the service starts at "
+                                     "boot without a login (may need sudo)")
+        options = parser.parse_args(argv[1:])
+        return (_install if install else _uninstall)(options)
     parser = argparse.ArgumentParser(
         description="Relay HIL device traffic for board agents dialing out")
-    parser.add_argument("--host", default="127.0.0.1",
-                        help="bind address (use 0.0.0.0 only behind a TLS reverse proxy)")
+    parser.add_argument("--host", default="127.0.0.1", choices=GATEWAY_LOOPBACK_HOSTS,
+                        help="loopback bind address; use SSH forwarding for remote clients")
     parser.add_argument("--port", type=int, default=50060)
-    parser.add_argument("--tls-cert", type=Path, help="serve wss:// directly with this certificate")
-    parser.add_argument("--tls-key", type=Path, help="private key matching --tls-cert")
     parser.add_argument("--print-token", action="store_true",
                         help="print the shared token at startup (operator channel only)")
     options = parser.parse_args(argv)
@@ -227,21 +279,16 @@ def main(argv=None) -> int:
     token = os.environ.get("BOTLAB_HIL_GATEWAY_TOKEN") or secrets.token_urlsafe(32)
     gateway = Gateway(token)
     try:
-        context = _ssl_context(options.tls_cert, options.tls_key)
-    except (HilError, OSError, ssl.SSLError) as error:
-        print(f"Gateway TLS setup failed: {error}", file=sys.stderr)
-        return 2
-    try:
-        server = serve(gateway.handler, options.host, options.port, ssl=context,
+        server = serve(gateway.handler, options.host, options.port,
                        max_size=MAX_FRAME_BYTES, compression=None,
                        ping_interval=20, ping_timeout=20)
     except OSError as error:
         print(f"Gateway cannot listen on {options.host}:{options.port}: {error}", file=sys.stderr)
         return 2
     port = server.socket.getsockname()[1]
-    scheme = "wss" if context else "ws"
-    print(f"BotLab HIL gateway: {scheme}://{options.host}:{port}", file=sys.stderr, flush=True)
-    print(f"Agent enrollment: botlab-agent connect --gateway {scheme}://{options.host}:{port} "
+    host = f"[{options.host}]" if ":" in options.host else options.host
+    print(f"BotLab HIL gateway: ws://{host}:{port}", file=sys.stderr, flush=True)
+    print(f"Agent enrollment: botlab-agent connect --gateway ws://{host}:{port} "
           f"--device <id>", file=sys.stderr, flush=True)
     if options.print_token:
         print(f"Token: {token}", file=sys.stderr, flush=True)
