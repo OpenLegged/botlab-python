@@ -10,9 +10,15 @@ from urllib.parse import urlsplit
 
 VERSION = 1
 MAX_MODEL_BYTES = 32 * 1024 * 1024
+MAX_CHUNK_BYTES = 32 * 1024 * 1024
 MAX_FRAME_BYTES = 48 * 1024 * 1024
 MAX_TENSOR_ELEMENTS = 1_000_000
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
+# Gateway→agent lease signal: the agent channel closes with this code when the
+# coordinator disconnects normally, so the resident agent redials at once —
+# the retry interval only guards against hammering a gateway that is down.
+LEASE_RELEASE_CLOSE_CODE = 4000
+GATEWAY_LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
 
 
 class HilError(ValueError):
@@ -49,30 +55,22 @@ def endpoint_address(endpoint: str) -> tuple[str, int]:
 
 
 def gateway_endpoint(endpoint: str) -> str:
-    """Validate a gateway origin: ws:// stays loopback, wss:// goes anywhere.
-
-    Mirrors the Control M1 endpoint rule — plaintext never leaves the loopback,
-    and paths are derived from the device ID, never stored.
-    """
+    """Validate a loopback WS origin; cross-machine links use SSH forwarding."""
     if not isinstance(endpoint, str):
-        raise HilError("Gateway endpoint must be ws:// or wss://")
+        raise HilError("Gateway endpoint must be a bare ws://loopback:port origin")
     try:
         url = urlsplit(endpoint)
         scheme = url.scheme.lower()
         if url.username or url.password or url.path not in ("", "/") or url.query or url.fragment:
             raise ValueError
-        if not url.hostname:
+        if scheme != "ws" or url.hostname not in GATEWAY_LOOPBACK_HOSTS:
             raise ValueError
-        if url.port is not None and not 1 <= url.port <= 65535:
-            raise ValueError
-        if scheme == "ws":
-            if url.hostname not in ("127.0.0.1", "localhost", "::1") or url.port is None:
-                raise ValueError
-        elif scheme != "wss":
+        if url.port is None or not 1 <= url.port <= 65535:
             raise ValueError
         return f"{scheme}://{url.netloc.lower()}"
     except ValueError as exc:
-        raise HilError("Gateway endpoint must be a bare ws://loopback:port or wss://host[:port] origin") from exc
+        raise HilError("Gateway endpoint must be a bare ws://loopback:port origin; "
+                       "use SSH forwarding for remote devices") from exc
 
 
 def _read(sock: socket.socket, size: int) -> bytes:

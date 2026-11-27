@@ -11,9 +11,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
-import shutil
-import ssl
-import subprocess
+import struct
 import threading
 import time
 from pathlib import Path
@@ -21,9 +19,11 @@ from pathlib import Path
 import pytest
 
 from botlab.hil.agent import AgentState, serve_stream
+from botlab.hil.agent import main as agent_main
 from botlab.hil.gateway import Gateway
+from botlab.hil.gateway import main as gateway_main
 from botlab.hil.host import HilHost
-from botlab.hil.protocol import HilError, gateway_endpoint, receive, send
+from botlab.hil.protocol import LEASE_RELEASE_CLOSE_CODE, HilError, gateway_endpoint, receive, send
 from botlab.hil.targets import save_target
 from botlab.hil.wsstream import WebSocketStream, connect_gateway
 
@@ -217,6 +217,123 @@ def test_gateway_exclusive_pairing(board, tmp_path):
         second.close()
 
 
+def dial_agent(endpoint: str, device: str = DEVICE):
+    """Board-side channel with header auth, mirroring `botlab-agent connect`."""
+    return ws_connect(f"{endpoint}/agent/{device}",
+                      additional_headers=[("Authorization", f"Bearer {TOKEN}")],
+                      open_timeout=5, max_size=64 * 1024 * 1024, legacy=True)
+
+
+class AgentReplies:
+    """Minimal board side for pairing tests: acknowledge every HIL frame with
+    ok, and record how the gateway ended the channel. The thread owns recv for
+    the socket's lifetime — websockets forbids concurrent recv — so tests wait
+    on ``expect`` instead of reading the socket themselves."""
+
+    def __init__(self, raw):
+        self.close = None
+        self.done = threading.Event()
+
+        def run():
+            while True:
+                try:
+                    message = raw.recv(timeout=5)
+                except TimeoutError:
+                    continue
+                except Exception as exc:
+                    frame = getattr(exc, "rcvd", None)
+                    self.close = (getattr(frame, "code", None),
+                                  getattr(frame, "reason", None))
+                    self.done.set()
+                    return
+                if not isinstance(message, bytes):
+                    self.done.set()
+                    return
+                payload = json.dumps({"ok": True, "version": 1}).encode()
+                raw.send(struct.pack("!I", len(payload)) + payload)
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def expect(self, code: int, reason: str) -> None:
+        assert self.done.wait(5), "gateway never closed the agent channel"
+        assert self.close == (code, reason)
+
+
+def test_gateway_coordinator_release_signals_instant_redial(gateway):
+    """A coordinator that completes its close handshake releases the device
+    with LEASE_RELEASE_CLOSE_CODE, so the resident agent redials at once and
+    the next coordinator pairs without waiting out a retry interval."""
+    endpoint, server_gateway = gateway
+    agent = dial_agent(endpoint)
+    board = AgentReplies(agent)
+    wait_registered(server_gateway)
+    coordinator = dial(endpoint)
+    try:
+        send(coordinator, {"op": "hello"})
+        assert receive(coordinator)["ok"] is True
+    finally:
+        coordinator.close()  # clean 1000: the browser's deliberate disconnect
+    board.expect(LEASE_RELEASE_CLOSE_CODE, "coordinator disconnected")
+
+    # The redial is immediate and the next coordinator pairs against it.
+    agent = dial_agent(endpoint)
+    board = AgentReplies(agent)
+    wait_registered(server_gateway)
+    coordinator = dial(endpoint)
+    try:
+        send(coordinator, {"op": "hello"})
+        assert receive(coordinator)["ok"] is True
+    finally:
+        coordinator.close()
+        agent.close()
+
+
+def test_gateway_abnormal_coordinator_drop_keeps_agent_backoff(gateway):
+    """An abrupt coordinator death (no close frame) keeps today's semantics:
+    the agent channel closes 1011 and the resident agent waits out its full
+    retry interval before re-registering."""
+    endpoint, server_gateway = gateway
+    agent = dial_agent(endpoint)
+    board = AgentReplies(agent)
+    wait_registered(server_gateway)
+    coordinator = dial(endpoint)
+    try:
+        send(coordinator, {"op": "hello"})
+        assert receive(coordinator)["ok"] is True
+        coordinator.websocket.socket.close()  # TCP drop: crash, not goodbye
+    finally:
+        coordinator.close()
+    board.expect(1011, "coordinator disconnected")
+    agent.close()
+
+
+def test_wsstream_records_gateway_close_code():
+    """The stream keeps the gateway's close code: the resident agent skips its
+    retry backoff only for a delivered LEASE_RELEASE_CLOSE_CODE, never for an
+    abrupt drop."""
+    def closer(websocket):
+        websocket.close(LEASE_RELEASE_CLOSE_CODE, "coordinator disconnected")
+
+    def dropper(websocket):
+        websocket.socket.close()
+
+    for behavior, expected in ((closer, LEASE_RELEASE_CLOSE_CODE), (dropper, None)):
+        server = ws_serve(behavior, "127.0.0.1", 0)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        stream = WebSocketStream(ws_connect(
+            f"ws://127.0.0.1:{server.socket.getsockname()[1]}",
+            open_timeout=5, legacy=True))
+        try:
+            with pytest.raises(OSError):
+                stream.recv(1)
+            assert stream.close_code == expected
+        finally:
+            stream.close()
+            server.shutdown()
+            thread.join(timeout=5)
+
+
 def test_gateway_bad_token(gateway, tmp_path, monkeypatch):
     endpoint, _ = gateway
     monkeypatch.setenv("BOTLAB_TARGETS_FILE", str(tmp_path / "targets.json"))
@@ -389,9 +506,10 @@ def test_gateway_device_restart_discards_stale_results(board, gateway, tmp_path)
 
 def test_gateway_endpoint_rules():
     assert gateway_endpoint("ws://127.0.0.1:50060") == "ws://127.0.0.1:50060"
-    assert gateway_endpoint("wss://boards.example.com") == "wss://boards.example.com"
-    assert gateway_endpoint("wss://Boards.Example.COM:8443/") == "wss://boards.example.com:8443"
-    for rejected in ("ws://10.0.0.5:50060", "wss://gw.example.com/device/x",
+    assert gateway_endpoint("ws://LOCALHOST:50060/") == "ws://localhost:50060"
+    assert gateway_endpoint("ws://[::1]:50060") == "ws://[::1]:50060"
+    for rejected in ("ws://10.0.0.5:50060", "wss://boards.example.com",
+                     "wss://localhost:50060", "wss://gw.example.com/device/x",
                      "http://127.0.0.1:50060", "ws://127.0.0.1",
                      "wss://user:pw@gw.example.com", "ftp://gw.example.com",
                      "wss://gw.example.com:99999", "ws://[::1]:50060/x", ""):
@@ -402,8 +520,8 @@ def test_gateway_endpoint_rules():
 def test_gateway_target_roundtrip(tmp_path, monkeypatch):
     monkeypatch.setenv("BOTLAB_TARGETS_FILE", str(tmp_path / "targets.json"))
     target = save_target({"id": "x5", "name": "Desk X5", "transport": "gateway",
-                          "endpoint": "wss://Boards.Example.com", "device": "rdk-x5-desk"})
-    assert target["endpoint"] == "wss://boards.example.com"
+                          "endpoint": "ws://LOCALHOST:50060/", "device": "rdk-x5-desk"})
+    assert target["endpoint"] == "ws://localhost:50060"
     assert target["device"] == "rdk-x5-desk"
     # Credentials never persist in target settings.
     assert "password" not in target and "token" not in target
@@ -412,84 +530,44 @@ def test_gateway_target_roundtrip(tmp_path, monkeypatch):
                      "endpoint": "ws://192.168.1.10:50060", "device": "x"})
     with pytest.raises(HilError):
         save_target({"id": "bad2", "name": "Bad", "transport": "gateway",
-                     "endpoint": "wss://boards.example.com", "device": "no spaces!"})
+                     "endpoint": "ws://127.0.0.1:50060", "device": "no spaces!"})
 
 
-@pytest.fixture(scope="module")
-def tls_authority(tmp_path_factory) -> Path:
-    if shutil.which("openssl") is None:
-        pytest.skip("openssl is required for gateway TLS tests")
-    root = tmp_path_factory.mktemp("pki")
+@pytest.mark.parametrize("endpoint", ["wss://localhost:50060", "wss://boards.example.com",
+                                      "ws://192.168.1.10:50060"])
+def test_gateway_connect_rejects_remote_endpoints_before_dial(endpoint, monkeypatch):
+    def unexpected_dial(*args, **kwargs):
+        pytest.fail("unsupported gateway endpoint reached the network")
 
-    def run(*args: str) -> None:
-        subprocess.run(["openssl", *args], check=True, capture_output=True, cwd=root)
-
-    # Python 3.13 verifies with VERIFY_X509_STRICT by default: a CA without
-    # basicConstraints/keyUsage is rejected ("CA cert does not include key usage
-    # extension"), so the fixture CA carries the extensions a real CA has.
-    run("req", "-x509", "-newkey", "rsa:2048", "-keyout", "ca.key", "-out", "ca.crt",
-        "-days", "2", "-nodes", "-subj", "/CN=BotLab HIL Test CA",
-        "-addext", "basicConstraints=critical,CA:TRUE",
-        "-addext", "keyUsage=critical,keyCertSign,cRLSign")
-    run("req", "-newkey", "rsa:2048", "-keyout", "server.key", "-out", "server.csr",
-        "-nodes", "-subj", "/CN=localhost")
-    (root / "san.ext").write_text("subjectAltName=DNS:localhost,IP:127.0.0.1\n")
-    run("x509", "-req", "-in", "server.csr", "-CA", "ca.crt", "-CAkey", "ca.key",
-        "-CAcreateserial", "-out", "server.crt", "-days", "2", "-extfile", "san.ext")
-    return root
+    monkeypatch.setattr("websockets.sync.client.connect", unexpected_dial)
+    with pytest.raises(HilError, match="loopback"):
+        connect_gateway(endpoint, "agent", DEVICE, TOKEN)
 
 
-def test_gateway_tls_verified(tls_authority, tmp_path, monkeypatch):
-    # websockets' sync TLS opening handshake stalls with small probability
-    # (upstream race, reproduced without any BotLab code). A stalled dial
-    # surfaces as a clean single-attempt HilError; production absorbs it at
-    # the layers that own retrying (the agent redials, the host user
-    # reconnects). This test retries the whole scenario once because the
-    # server side of a stalled attempt recovers as soon as the client goes
-    # away — anything else failing still fails the test.
-    for attempt in (1, 2):
-        try:
-            _tls_scenario(tls_authority, tmp_path, monkeypatch)
-        except HilError as exc:
-            if attempt == 2 or "timed out" not in str(exc):
-                raise
-        else:
-            return
+@pytest.mark.parametrize("endpoint", ["wss://localhost:50060", "wss://boards.example.com",
+                                      "ws://192.168.1.10:50060"])
+def test_agent_connect_rejects_remote_configuration_before_starting(endpoint, monkeypatch, capsys):
+    monkeypatch.setattr("botlab.hil.agent._connect",
+                        lambda *a: pytest.fail("invalid configuration entered agent retry loop"))
+    assert agent_main(["connect", "--gateway", endpoint, "--device", DEVICE]) == 1
+    assert "SSH forwarding" in capsys.readouterr().err
 
 
-def _tls_scenario(tls_authority, tmp_path, monkeypatch):
-    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    context.load_cert_chain(tls_authority / "server.crt", tls_authority / "server.key")
-    server_gateway = Gateway(TOKEN)
-    server = ws_serve(server_gateway.handler, "127.0.0.1", 0, ssl=context,
-                      max_size=64 * 1024 * 1024, ping_interval=5, ping_timeout=5)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    endpoint = f"wss://localhost:{server.socket.getsockname()[1]}"
-    monkeypatch.setenv("BOTLAB_TARGETS_FILE", str(tmp_path / "targets.json"))
-    monkeypatch.setenv("BOTLAB_HIL_TOKEN", TOKEN)
-    monkeypatch.delenv("BOTLAB_HIL_CA_BUNDLE", raising=False)
-    try:
-        # Without the dev CA bundle the TLS handshake must fail outright.
-        with pytest.raises(HilError, match="Gateway connection failed"):
-            connect_gateway(endpoint, "agent", DEVICE, TOKEN)
+@pytest.mark.parametrize("command", [[], ["install"]], ids=["foreground", "service"])
+@pytest.mark.parametrize("host", ["0.0.0.0", "::", "192.168.1.10"])
+def test_gateway_cli_rejects_non_loopback_bind(command, host, monkeypatch):
+    monkeypatch.setattr("websockets.sync.server.serve",
+                        lambda *a, **kw: pytest.fail("unexpected network listener"))
+    monkeypatch.setattr("botlab.hil.service.install_service",
+                        lambda *a, **kw: pytest.fail("unexpected service install"))
+    with pytest.raises(SystemExit) as raised:
+        gateway_main([*command, "--host", host])
+    assert raised.value.code == 2
 
-        monkeypatch.setenv("BOTLAB_HIL_CA_BUNDLE", str(tls_authority / "ca.crt"))
-        agent = AgentThread(endpoint, DEVICE, tmp_path / "models")
-        # A stalled TLS opening handshake burns its whole 5 s timeout before
-        # the agent's next dial; leave room for a few of those under load.
-        wait_registered(server_gateway, timeout=25)
-        save_target({"id": "tls", "name": "TLS gateway", "transport": "gateway",
-                     "endpoint": endpoint, "device": DEVICE, "backend": "echo"})
-        host = HilHost(tmp_path / "project", selected_target="tls")
-        try:
-            assert host.handle("POST", "/hil/connect", {"target": "tls"})["connected"] is True
-            host.handle("POST", "/hil/start", {})
-            digest = load_echo_model(host)
-            assert run_inference(host, digest, 0)["outputs"]["x"]["data"] == [2.0, 5.0]
-        finally:
-            host.close()
-            agent.close()
-    finally:
-        server.shutdown()
-        thread.join(timeout=5)
+
+@pytest.mark.parametrize("command", [[], ["install"]], ids=["foreground", "service"])
+@pytest.mark.parametrize("flag", ["--tls-cert", "--tls-key"])
+def test_gateway_cli_rejects_removed_tls_options(command, flag):
+    with pytest.raises(SystemExit) as raised:
+        gateway_main([*command, flag, "unused.pem"])
+    assert raised.value.code == 2

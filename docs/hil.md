@@ -401,29 +401,74 @@ behavior rather than gaining persistence automatically.
 
 ### Gateway targets (outbound device link)
 
-The board can also dial out to a device gateway, so it never needs an inbound
-port — the shape used for hosted/web HIL. The gateway relays opaque HIL v1
-frames; the protocol, browser UI and acceptance rules are unchanged, and the
-inference path carries no receipts or retry semantics.
+The resident board agent connects to a device gateway on the same board over
+loopback `ws://`. The user's computer reaches that gateway through SSH local
+port forwarding; only SSH needs to be reachable across machines. For a local
+trial, the gateway, agent and browser all run on the same computer. The gateway
+relays opaque HIL v1 frames, and the inference path carries no receipts or
+retry semantics.
 
 ```bash
-# Wherever the gateway runs (loopback dev, or wss:// behind/direct TLS):
+# On the board, foreground trial: bind the gateway to the board loopback.
 botlab-hil-gateway --host 127.0.0.1 --port 50060 --print-token
 # Token via BOTLAB_HIL_GATEWAY_TOKEN; there is no tokenless mode.
 
-# On the board: resident agent registers and redials after link loss:
+# On the board, foreground trial: the resident agent registers and redials
+# after link loss:
 BOTLAB_HIL_TOKEN=<token> botlab-agent connect \
-  --gateway wss://boards.example.com --device rdk-x5-desk \
+  --gateway ws://127.0.0.1:50060 --device rdk-x5-desk \
   --backend onnxruntime --root ~/botlab
 
-# On the host:
-botlab target add desk-x5 --gateway wss://boards.example.com --device rdk-x5-desk
+# On the user's computer, keep this SSH tunnel running in a separate terminal:
+ssh -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 \
+  -L 127.0.0.1:50060:127.0.0.1:50060 <user>@<board>
+
+# In another local terminal, connect through the forwarded loopback endpoint:
+botlab target add desk-x5 --gateway ws://127.0.0.1:50060 --device rdk-x5-desk
 BOTLAB_HIL_TOKEN=<token> botlab run --hil desk-x5
 ```
 
-Rules: `ws://` endpoints are loopback-only; remote gateways must be `wss://`
-(private CA via `BOTLAB_HIL_CA_BUNDLE`, verification never disabled). The token
-is never stored in target settings and never passed as a CLI argument. Native
+#### Boot autostart (systemd user service)
+
+Both resident processes install on the board as systemd user services. With
+user lingering enabled, they start after a reboot without an open board
+terminal. The user's computer still needs the SSH tunnel above:
+
+```bash
+# On the board: pins the token (from BOTLAB_HIL_GATEWAY_TOKEN or a
+# prompt) into ~/.config/botlab/gateway-token.env (0600) — a service must not
+# mint a fresh random token per restart, that would invalidate every agent.
+BOTLAB_HIL_GATEWAY_TOKEN=<token> botlab-hil-gateway install \
+  --host 127.0.0.1 --port 50060
+
+# On the board: same token via BOTLAB_HIL_TOKEN or a prompt; it lands in
+# <root>/agent/gateway-token.env (0600) and the unit dials out under the
+# installing interpreter.
+BOTLAB_HIL_TOKEN=<token> botlab-agent install \
+  --gateway ws://127.0.0.1:50060 --device rdk-x5-desk --root ~/botlab \
+  --enable-linger
+
+botlab-hil-gateway uninstall
+botlab-agent uninstall [--root ~/botlab]
+```
+
+- Units live in `~/.config/systemd/user/`: `botlab-hil-gateway.service` and
+  `botlab-agent-<root-id>.service`. The agent unit uses the same root-keyed
+  name SSH provisioning writes, so installing or provisioning the same root
+  takes the existing unit over — one agent service per root.
+- A user unit starts at login. Boot without a login additionally needs user
+  lingering: pass `--enable-linger` to run `loginctl enable-linger` for the
+  installing user (it may require sudo; the install prints the exact command
+  on failure and reports `autostart` honestly, never implying it). Without a
+  systemd user manager the install fails loudly instead of pretending.
+- Logs go to the journal: `journalctl --user -u <unit> -f`. Uninstall removes
+  the unit and the token file; deployed projects under the root remain.
+
+Rules: gateway listeners and endpoints use loopback `ws://` only. Cross-machine
+traffic passes through SSH local port forwarding. The token is never stored in
+host target settings and never passed as a CLI argument; a
+service install pins it on the machine that runs that service, in a 0600
+EnvironmentFile. Native
 clients send it in the `Authorization` header; browsers, which cannot set
 handshake headers, send the same credential as one leading text control frame
 `{"type": "gateway-auth", "token": ...}` before the binary relay begins (any
@@ -431,7 +476,10 @@ text frame after that is still a protocol error). One
 agent per device (re-registration takes over, closing the displaced pairing —
 device restart discards stale sessions), one coordinator per device (a second
 gets `device busy`), and either side dropping releases the HIL lease exactly
-like a TCP disconnect.
+like a TCP disconnect: a coordinator that disconnects normally closes the agent
+channel with a release signal, so the resident agent redials at once and the
+next coordinator pairs immediately — only abnormal drops keep the agent's
+`--retry-interval` backoff (default 5 s).
 
 Latency acceptance has two tiers: functional (the model executes correctly
 through the gateway — `tests/test_hil_gateway.py`) and real-time (wall-clock
@@ -456,9 +504,13 @@ local bridge uses a per-process token plus Host/Origin validation.
   + SSH + compatible ONNX Runtime CPU wheels. No MCU/RTOS support or OS flashing.
 - Static positive tensor dimensions, float32, named multi-input/output models.
   Dynamic shapes, rank-zero graph tensors and ONNX external weight files are
-  unsupported. At most 32 model declarations and 32 MiB of unique model data per
-  deployment; aggregate project storage is limited to 512 MiB. The legacy model
-  cache has a separate 256 MiB limit.
+  unsupported. A dynamic `batch` axis from training-side exports runs fine under
+  plain ONNX Runtime and the browser engine, then fails HIL deployment with
+  `HIL requires static, positive tensor dimensions`; pin the axis when exporting
+  (see `onnx-export.md`, item 4). At most 32 model declarations per deployment;
+  per-resource and aggregate byte totals are uncapped by design — blobs upload
+  in bounded chunks. The legacy single-frame deployment keeps its 32 MiB total
+  artifact cap, and the legacy model cache a separate 256 MiB limit.
 - One active owner/session; all projects use the same provisioned runtime
   dependencies. No arbitrary target-side project Python or `requirements.txt`.
 - No BPU conversion, TensorRT build, full-controller deployment, hardware actuator

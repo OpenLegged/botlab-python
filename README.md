@@ -381,6 +381,16 @@ Current constraints:
   directory. (`botlab run --headless` additionally resolves the shared assets root, but
   `botlab build`/`validate` still require self-contained projects.)
 
+## Saved runtime results
+
+Inside an active controller step, `sim.write_result("results/run.1/output.json", value)`
+saves JSON output in the project directory. Safe numeric or dotted result directories
+are supported. The local editor exposes these files as project text and keeps them
+when saving the workspace. `botlab build` and the project digest exclude files only
+when both the `results/` JSON path and the `botlab.runtime-result` version 1 envelope
+match; ordinary or malformed JSON remains a project input. Updating a generated
+result therefore does not change the compiled project or add it to `release.zip`.
+
 ## Development
 
 ```bash

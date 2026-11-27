@@ -99,6 +99,8 @@ class FakeDisplay:
     def __init__(self):
         self.frames = []
         self.metrics = []
+        self.overlays = []
+        self.controls_hud = []
 
     def broadcast(self, time_seconds, qpos, qvel):
         self.frames.append((time_seconds, list(qpos), list(qvel)))
@@ -108,6 +110,12 @@ class FakeDisplay:
 
     def update_diagnostics(self, diagnostics):
         pass
+
+    def update_overlay(self, overlay):
+        self.overlays.append(overlay)
+
+    def update_controls_hud(self, items):
+        self.controls_hud.append(items)
 
 
 def simple_plan(output=None):
@@ -346,6 +354,39 @@ class SessionDelegationTest(unittest.TestCase):
         botlab_host.updateMetrics({"speed": 1.5})
         self.assertIn(("request_reset", "test reset"), physics.calls)
         self.assertEqual(display.metrics, [{"speed": 1.5}])
+
+    def test_overlay_and_controls_hud_route_through_session(self):
+        physics = SpyPhysics()
+        display = FakeDisplay()
+        session = _host_runtime.LocalRuntimeSession(physics, display=display, registry=FAKE_REGISTRY)
+        self.addCleanup(session.close)
+        botlab_host.set_runtime_session(session)
+        overlay = {"tag": {"kind": "label", "body": "pelvis", "text": "P1"}}
+        items = [{"input": "W", "action": "Move"}]
+        botlab_host.updateOverlay(overlay)
+        botlab_host.updateControlsHud(items)
+        self.assertEqual(display.overlays, [overlay])
+        self.assertEqual(display.controls_hud, [items])
+
+    def test_overlay_and_controls_hud_reject_bad_payloads_headless(self):
+        # Presentation channels validate even when there is nothing to render:
+        # a malformed update must not disappear silently.
+        session = _host_runtime.LocalRuntimeSession(SpyPhysics(), registry=FAKE_REGISTRY)
+        self.addCleanup(session.close)
+        with self.assertRaisesRegex(TypeError, "overlay.update\\(\\) expects a mapping"):
+            session.updateOverlay([("tag", {})])
+        with self.assertRaisesRegex(TypeError, "controls_hud.update\\(\\) expects a list"):
+            session.updateControlsHud({"input": "W"})
+        # Valid values are accepted and dropped without a display.
+        session.updateOverlay({})
+        session.updateControlsHud([])
+
+    def test_apply_external_force_reports_local_runtime_gap(self):
+        session = _host_runtime.LocalRuntimeSession(SpyPhysics(), registry=FAKE_REGISTRY)
+        self.addCleanup(session.close)
+        botlab_host.set_runtime_session(session)
+        with self.assertRaisesRegex(RuntimeError, "not supported by the local runtime"):
+            botlab_host.applyExternalForce("robot-1", "pelvis", [1.0, 0.0, 0.0])
 
 
 class RunnerConfigurationTest(unittest.TestCase):

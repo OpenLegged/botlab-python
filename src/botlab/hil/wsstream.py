@@ -7,10 +7,7 @@ stays standard-library only.
 """
 from __future__ import annotations
 
-import os
-import ssl
-
-from .protocol import MAX_FRAME_BYTES, HilError
+from .protocol import MAX_FRAME_BYTES, HilError, gateway_endpoint
 
 GATEWAY_TIMEOUT_HEADER = 5
 
@@ -20,13 +17,17 @@ class WebSocketStream:
 
     ``sendall`` sends exactly one binary message; ``recv`` serves bytes from an
     internal buffer refilled one message at a time, so partial reads behave
-    like a stream socket for ``protocol.receive``.
+    like a stream socket for ``protocol.receive``. ``close_code`` records the
+    gateway's delivered close code once the channel ends (``None`` before that
+    and when no close frame arrived), so the resident agent can tell a
+    delivered lease signal from an abrupt drop.
     """
 
     def __init__(self, websocket):
         self.websocket = websocket
         self._buffer = b""
         self._timeout: float | None = None
+        self.close_code: int | None = None
 
     def settimeout(self, timeout):
         self._timeout = timeout
@@ -44,6 +45,10 @@ class WebSocketStream:
             except TimeoutError:
                 raise
             except Exception as exc:
+                # `rcvd.code` (not the deprecated ConnectionClosed.code) is
+                # the delivered close code, or None when no frame arrived.
+                close = getattr(exc, "rcvd", None)
+                self.close_code = getattr(close, "code", None)
                 raise OSError(_describe(exc)) from exc
             if not isinstance(message, (bytes, bytearray)):
                 raise OSError("Gateway channel received a non-binary WebSocket frame")
@@ -78,34 +83,24 @@ def gateway_url(endpoint: str, channel: str, device: str) -> str:
 
 
 def connect_gateway(endpoint: str, channel: str, device: str, token: str) -> WebSocketStream:
-    """Dial a gateway channel with bearer authentication over verified TLS.
+    """Dial a loopback WS gateway with bearer authentication.
 
-    ``ws://`` is accepted for loopback development gateways only (the target
-    validator enforces this); ``wss://`` verification is never disabled. A
-    private CA is honored via ``BOTLAB_HIL_CA_BUNDLE``.
-
-    Exactly one dial is attempted. websockets' sync TLS opening handshake
-    stalls with small probability (upstream race, reproducible without any
-    BotLab code); a stalled dial surfaces here as a clean ``HilError`` —
-    never a silent retry, because a retry can race the server side of the
-    stalled attempt (device channel: spurious ``device busy``).
+    Cross-machine connections use SSH forwarding. Exactly one dial is attempted;
+    the agent or coordinator owns reconnection after a failed attempt.
     """
+    endpoint = gateway_endpoint(endpoint)
     try:
         from websockets.sync.client import connect
     except ImportError as exc:
         raise HilError("Gateway mode needs the websockets package; install botlab-python[target]") from exc
     url = gateway_url(endpoint, channel, device)
-    ca_bundle = os.environ.get("BOTLAB_HIL_CA_BUNDLE")
-    context = ssl.create_default_context(cafile=ca_bundle) if endpoint.startswith("wss://") else None
-    if ca_bundle and context is None:
-        raise HilError("BOTLAB_HIL_CA_BUNDLE applies to wss:// gateways only")
     # legacy=True keeps the long-lived connection object (no context
     # manager); compression=None skips permessage-deflate — tensor frames
     # pay CPU latency for negligible size wins; proxy=None dials the
     # gateway directly, never through ambient system proxy settings.
     try:
         websocket = connect(url, additional_headers=[("Authorization", f"Bearer {token}")],
-                            ssl=context, open_timeout=GATEWAY_TIMEOUT_HEADER,
+                            open_timeout=GATEWAY_TIMEOUT_HEADER,
                             max_size=MAX_FRAME_BYTES, compression=None, legacy=True,
                             proxy=None)
     except Exception as exc:
