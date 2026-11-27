@@ -52,6 +52,15 @@ def build_digest(manifest: dict) -> str:
     return hashlib.sha256(_canonical({k: v for k, v in manifest.items() if k != "build_id"})).hexdigest()
 
 
+def _hash_file(path):
+    """Streamed SHA-256 so store objects never load whole into memory."""
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
 def _identity(value):
     if not isinstance(value, str) or not PROJECT_ID.fullmatch(value):
         raise HilError("Invalid project ID")
@@ -519,6 +528,10 @@ class ProjectStore:
             shared = self.object_path(entry["sha256"])
             if not shared.is_file() or shared.stat().st_size != entry["size"]:
                 raise HilError(f"Blob {entry['sha256']} was not fully uploaded")
+            # The staging checks trust size-matching dedup hits; a store object
+            # corrupted after upload must not ride them into a release.
+            if _hash_file(shared) != entry["sha256"]:
+                raise HilError(f"Blob {entry['sha256']} failed SHA-256 verification")
         release = self.release_path(manifest["project"]["id"], manifest["build_id"])
         already = release.exists()
         if already:

@@ -560,6 +560,22 @@ def test_staged_deploy_serves_duplicate_content_resources(state):
     assert len(list(state.store.objects.glob("*.bin"))) == 2
 
 
+def test_commit_rejects_size_matching_corrupt_store_object(state):
+    owner = object()
+    manifest, contents = resource_artifact()
+    staged_deploy(state, owner, manifest, contents)
+    # Corrupt a completed object in place, keeping its length: the size-only
+    # staging checks still report it present, so commit must re-verify bytes.
+    model = state.store.object_path(hashlib.sha256(MODEL).hexdigest())
+    model.write_bytes(bytes(len(MODEL)))
+    revised, _ = resource_artifact(revision="second")  # same resources, new build
+    reply = state.dispatch(owner, {"op": "projects.stage", "manifest": revised})
+    assert reply["missing"] == []
+    with pytest.raises(HilError, match="SHA-256"):
+        state.dispatch(owner, {"op": "projects.commit", "staging": reply["staging"]})
+    assert len(state.store.summary("project-one")["releases"]) == 1
+
+
 @pytest.mark.parametrize("resume_upload", [True, False], ids=["resume-put", "direct-commit"])
 def test_staged_deploy_cleans_partial_blob_completed_by_another_staging(state, resume_upload):
     owner = object()
